@@ -9,7 +9,8 @@ from database import db
 from keyboards import (
     admin_main_menu, channel_management_menu,
     cancel_keyboard, channels_list_inline,
-    user_management_menu, users_list_inline
+    user_management_menu, users_list_inline,
+    admin_games_menu, admin_section_placeholder_menu
 )
 from utils import user_mention, get_display_name, escape_html
 
@@ -47,16 +48,49 @@ def is_admin_pv(message: Message) -> bool:
     return message.from_user.id in ADMIN_IDS and message.chat.type == "private"
 
 
+# ═══════ پنل‌های جداگانه بخش‌ها ═══════
+@router.message(F.text == "بازی ها", F.from_user.id.in_(ADMIN_IDS), F.chat.type == "private")
+async def open_games_admin_panel(message: Message, state: FSMContext):
+    if not is_admin_pv(message):
+        return
+    await state.clear()
+    await message.answer("🎮 <b>پنل مدیریت بازی‌ها</b>", reply_markup=admin_games_menu(), parse_mode="HTML")
+
+
+@router.message(F.text.in_({"فوتبال", "سلف", "مود"}), F.from_user.id.in_(ADMIN_IDS), F.chat.type == "private")
+async def open_other_admin_panel(message: Message, state: FSMContext):
+    if not is_admin_pv(message):
+        return
+    await state.clear()
+    titles = {
+        "فوتبال": "⚽ پنل مدیریت فوتبال",
+        "سلف": "🎯 پنل مدیریت سلف",
+        "مود": "🛠 پنل مدیریت مود و تنظیمات",
+    }
+    await message.answer(
+        f"{titles[message.text]}\n\n🔜 این بخش در مرحله بعد ساخته می‌شود.",
+        reply_markup=admin_section_placeholder_menu(),
+    )
+
+
 # ═══════ بازگشت‌ها ═══════
-@router.message(F.text == "🔙 بازگشت به پنل ادمین", F.chat.type == "private")
+@router.message(F.text.in_({"🔙 منوی اصلی", "🔙 بازگشت به پنل ادمین"}), F.from_user.id.in_(ADMIN_IDS), F.chat.type == "private")
 async def back_to_admin(message: Message, state: FSMContext):
     if not is_admin_pv(message):
         return
     await state.clear()
-    await message.answer("🔧 پنل مدیریت", reply_markup=admin_main_menu())
+    await message.answer("🔧 پنل مدیریت ربات", reply_markup=admin_main_menu())
 
 
-@router.message(F.text == "❌ انصراف", F.chat.type == "private")
+@router.message(F.text == "🔙 بازگشت به پنل بازی‌ها", F.from_user.id.in_(ADMIN_IDS), F.chat.type == "private")
+async def back_to_admin_games(message: Message, state: FSMContext):
+    if not is_admin_pv(message):
+        return
+    await state.clear()
+    await message.answer("🎮 پنل مدیریت بازی‌ها", reply_markup=admin_games_menu())
+
+
+@router.message(F.text == "❌ انصراف", F.from_user.id.in_(ADMIN_IDS), F.chat.type == "private")
 async def cancel_action_msg(message: Message, state: FSMContext):
     await state.clear()
     if message.from_user.id in ADMIN_IDS:

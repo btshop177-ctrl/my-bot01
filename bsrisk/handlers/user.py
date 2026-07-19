@@ -6,7 +6,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from database import db
-from keyboards import user_main_menu, cancel_keyboard, admin_main_menu
+from keyboards import (
+    user_main_menu, user_games_menu, cancel_keyboard, admin_main_menu,
+    main_menu
+)
 from config import ADMIN_IDS
 from utils import user_mention, escape_html
 
@@ -29,6 +32,40 @@ def validate_game_name(name: str) -> tuple[bool, str]:
     if not re.match(r'^[a-zA-Z]+$', name):
         return False, "❌ فقط <b>حروف انگلیسی</b> (a-z) مجاز است!"
     return True, ""
+
+
+# ═══════ منوی اصلی چهار بخشی ═══════
+@router.message(F.text == "بازی ها", F.chat.type == "private")
+async def open_games_menu(message: Message, state: FSMContext):
+    if message.from_user.id in ADMIN_IDS:
+        return
+    await state.clear()
+    await message.answer("🎮 <b>بخش بازی‌ها</b>", reply_markup=user_games_menu(), parse_mode="HTML")
+
+
+@router.message(F.text.in_({"فوتبال", "سلف", "مود"}), F.chat.type == "private")
+async def open_unimplemented_section(message: Message, state: FSMContext):
+    if message.from_user.id in ADMIN_IDS:
+        return
+    await state.clear()
+    titles = {
+        "فوتبال": "⚽ فوتبال",
+        "سلف": "🎯 سلف",
+        "مود": "🛠 مود",
+    }
+    await message.answer(
+        f"<b>{titles[message.text]}</b>\n\n🔜 این بخش در مرحله بعد ساخته می‌شود.",
+        reply_markup=main_menu(),
+        parse_mode="HTML",
+    )
+
+
+@router.message(F.text == "🔙 منوی اصلی", F.chat.type == "private")
+async def back_to_main_menu(message: Message, state: FSMContext):
+    if message.from_user.id in ADMIN_IDS:
+        return
+    await state.clear()
+    await message.answer("🏠 منوی اصلی", reply_markup=user_main_menu())
 
 
 # ═══════ استارت ═══════
@@ -138,7 +175,7 @@ async def change_name_start(message: Message, state: FSMContext):
 async def change_name_process(message: Message, state: FSMContext):
     if message.text == "❌ انصراف":
         await state.clear()
-        await message.answer("❌ لغو شد.", reply_markup=user_main_menu())
+        await message.answer("❌ لغو شد.", reply_markup=user_games_menu())
         return
 
     name = message.text.strip() if message.text else ""
@@ -161,7 +198,7 @@ async def change_name_process(message: Message, state: FSMContext):
     mention = user_mention(message.from_user.id, name)
     await message.answer(
         f"✅ نام شما به {mention} تغییر کرد!",
-        reply_markup=user_main_menu(),
+        reply_markup=user_games_menu(),
         parse_mode="HTML"
     )
 
@@ -177,7 +214,7 @@ async def check_join_callback(callback: CallbackQuery, bot: Bot, state: FSMConte
         for ch in channels:
             try:
                 member = await bot.get_chat_member(int(ch["channel_id"]), user_id)
-                if member.status in ["left", "kicked"]:
+                if member.status in ["left", "kicked"] or getattr(member, "is_member", True) is False:
                     not_joined.append(ch)
             except Exception:
                 pass
@@ -224,6 +261,14 @@ async def check_join_callback(callback: CallbackQuery, bot: Bot, state: FSMConte
     await callback.message.edit_text("✅ <b>عضویت تأیید شد!</b>", parse_mode="HTML")
     await callback.answer()
 
+    # /start قبل از تأیید عضویت توسط میدلور متوقف می‌شود؛ بنابراین کاربر
+    # ممکن است هنوز در جدول users نباشد. قبل از دریافت نام او را ثبت می‌کنیم.
+    user = callback.from_user
+    user_data = await db.get_user(user_id)
+    if not user_data:
+        await db.add_user(user_id, user.username or "", user.full_name or "")
+    else:
+        await db.update_user_info(user_id, user.username or "", user.full_name or "")
     user_data = await db.get_user(user_id)
     if not user_data or not user_data['game_name']:
         await state.set_state(SetNameState.waiting_for_name)

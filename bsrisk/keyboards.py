@@ -4,16 +4,56 @@ from aiogram.types import (
 )
 
 
-# ═══════════════ ادمین ═══════════════
-
-def admin_main_menu() -> ReplyKeyboardMarkup:
+# ═══════════════ منوی اصلی خصوصی ═══════════════
+# این کیبورد فقط در گفت‌وگوی خصوصی استفاده می‌شود. در گروه و کانال
+# هیچ ReplyKeyboardMarkup ساخته نمی‌شود.
+def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📊 آمار ربات"), KeyboardButton(text="📢 مدیریت کانال‌ها")],
-            [KeyboardButton(text="👥 لیست کاربران"), KeyboardButton(text="📨 ارسال همگانی")],
-            [KeyboardButton(text="🔧 مدیریت کاربر")],
+            [KeyboardButton(text="فوتبال"), KeyboardButton(text="بازی ها")],
+            [KeyboardButton(text="سلف"), KeyboardButton(text="مود")],
         ],
-        resize_keyboard=True
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+def admin_main_menu() -> ReplyKeyboardMarkup:
+    """منوی اصلی ادمین؛ پنل هر بخش در هندلر همان بخش باز می‌شود."""
+    return main_menu()
+
+
+def user_main_menu() -> ReplyKeyboardMarkup:
+    """منوی اصلی کاربر در PV."""
+    return main_menu()
+
+
+def user_games_menu() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="👤 حساب کاربری"), KeyboardButton(text="💰 موجودی")],
+            [KeyboardButton(text="✏️ تغییر نام"), KeyboardButton(text="📋 راهنما")],
+            [KeyboardButton(text="🔙 منوی اصلی")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def admin_games_menu() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📊 آمار ربات"), KeyboardButton(text="🔧 مدیریت کاربر")],
+            [KeyboardButton(text="📢 مدیریت کانال‌ها")],
+            [KeyboardButton(text="🔙 منوی اصلی")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def admin_section_placeholder_menu() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="🔙 منوی اصلی")]],
+        resize_keyboard=True,
     )
 
 
@@ -22,9 +62,9 @@ def channel_management_menu() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="➕ افزودن کانال"), KeyboardButton(text="➖ حذف کانال")],
             [KeyboardButton(text="📋 لیست کانال‌ها")],
-            [KeyboardButton(text="🔙 بازگشت به پنل ادمین")],
+            [KeyboardButton(text="🔙 بازگشت به پنل بازی‌ها")],
         ],
-        resize_keyboard=True
+        resize_keyboard=True,
     )
 
 
@@ -33,16 +73,16 @@ def user_management_menu() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="✏️ ویرایش نام کاربر"), KeyboardButton(text="💰 ویرایش سکه")],
             [KeyboardButton(text="🚫 بن کاربر"), KeyboardButton(text="✅ آنبن کاربر")],
-            [KeyboardButton(text="🔙 بازگشت به پنل ادمین")],
+            [KeyboardButton(text="🔙 بازگشت به پنل بازی‌ها")],
         ],
-        resize_keyboard=True
+        resize_keyboard=True,
     )
 
 
 def cancel_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="❌ انصراف")]],
-        resize_keyboard=True
+        resize_keyboard=True,
     )
 
 
@@ -59,15 +99,14 @@ def channels_list_inline(channels: list) -> InlineKeyboardMarkup:
 
 
 # ═══════════════ لیست کاربران برای انتخاب ═══════════════
-
 def users_list_inline(users: list, action: str, page: int = 0, per_page: int = 10) -> InlineKeyboardMarkup:
     buttons = []
     none_counter = 0
     start = page * per_page
     end = start + per_page
 
-    for i in range(start):
-        if not users[i]['full_name'] and not users[i]['username']:
+    for user in users[:start]:
+        if not user['full_name'] and not user['username']:
             none_counter += 1
 
     for user in users[start:end]:
@@ -114,19 +153,43 @@ def users_list_inline(users: list, action: str, page: int = 0, per_page: int = 1
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+# ═══════════════ گروه: فقط InlineKeyboardMarkup ═══════════════
+def group_admin_panel_keyboard(is_owner: bool = False) -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(text="⚙️ تنظیم جوین اجباری", callback_data="grp:join")],
+        [InlineKeyboardButton(text="🚫 راهنمای بن کاربر", callback_data="grp:ban_help")],
+        [InlineKeyboardButton(text="🔇 راهنمای سکوت", callback_data="grp:mute_help")],
+    ]
+    if is_owner:
+        buttons.append([
+            InlineKeyboardButton(text="👥 مدیریت دسترسی ادمین‌ها", callback_data="grp:permissions")
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def group_join_settings_keyboard(enabled: bool) -> InlineKeyboardMarkup:
+    toggle_text = "🔴 خاموش کردن جوین اجباری" if enabled else "🟢 روشن کردن جوین اجباری"
+    toggle_action = "off" if enabled else "on"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=toggle_text, callback_data=f"grp:join:{toggle_action}")],
+        [InlineKeyboardButton(text="📋 کانال‌های این گروه", callback_data="grp:join:list")],
+        [InlineKeyboardButton(text="➕ افزودن کانال با دستور", callback_data="grp:join:add_help")],
+        [InlineKeyboardButton(text="🔙 بازگشت", callback_data="grp:back")],
+    ])
+
+
+def group_permissions_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ اعطای دسترسی با دستور", callback_data="grp:perm:add_help")],
+        [InlineKeyboardButton(text="➖ لغو دسترسی با دستور", callback_data="grp:perm:remove_help")],
+        [InlineKeyboardButton(text="📋 مشاهده دسترسی‌ها", callback_data="grp:perm:list")],
+        [InlineKeyboardButton(text="🔙 بازگشت", callback_data="grp:back")],
+    ])
+
+
 # ═══════════════ کاربر ═══════════════
-
-def user_main_menu() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="👤 حساب کاربری"), KeyboardButton(text="💰 موجودی")],
-            [KeyboardButton(text="✏️ تغییر نام"), KeyboardButton(text="📋 راهنما")],
-        ],
-        resize_keyboard=True
-    )
-
-
 def join_channels_keyboard(channels: list) -> InlineKeyboardMarkup:
+    """کیبورد جوین اجباری؛ این کیبورد فقط در PV ارسال می‌شود."""
     buttons = []
     for ch in channels:
         link = ch['invite_link'] or f"https://t.me/{ch['channel_username']}"
