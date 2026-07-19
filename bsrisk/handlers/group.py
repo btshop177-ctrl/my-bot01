@@ -2,7 +2,6 @@ from datetime import datetime, timedelta
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command
 from aiogram.types import CallbackQuery, ChatPermissions, Message
 
 from config import MUTE_DURATION
@@ -62,6 +61,57 @@ def command_name(text: str) -> str:
     return first.split("@", maxsplit=1)[0].lstrip("/")
 
 
+def command_action(text: str) -> tuple[str, str]:
+    """تشخیص دستور فارسی فقط در ابتدای پیام.
+
+    عبارت‌هایی مثل «پنل تو اول چک کن» عمداً دستور محسوب نمی‌شوند؛
+    پنل فقط وقتی اجرا می‌شود که کل پیام دقیقاً «پنل» باشد.
+    """
+    normalized = (text or "").strip()
+    if normalized.startswith("/"):
+        normalized = normalized[1:]
+        if not normalized:
+            return "", ""
+        first, *rest = normalized.split(maxsplit=1)
+        first = first.split("@", maxsplit=1)[0]
+        normalized = first + ((" " + rest[0]) if rest else "")
+
+    commands = [
+        ("تنظیمات گروه", "panel"), ("پنل گروه", "panel"), ("پنل", "panel"),
+        ("جوین روشن", "join_on"), ("جوین خاموش", "join_off"),
+        ("جوین اضافه", "join_add"), ("جوین حذف", "join_remove"),
+        ("لیست جوین", "join_list"),
+        ("اعطای مدیریت", "grant_manage"), ("اعطای جوین", "grant_join"),
+        ("اعطای بن", "grant_ban"), ("لغو مدیریت", "revoke_manage"),
+        ("لغو جوین", "revoke_join"), ("لغو بن", "revoke_ban"),
+        ("رفع سکوت", "unmute"), ("حذف سکوت", "unmute"),
+        ("رفع بن", "unban"), ("بن", "ban"), ("سکوت", "mute"),
+        # نام‌های انگلیسی قبلی برای سازگاری نگه داشته شده‌اند، اما در راهنما
+        # و دکمه‌ها فقط معادل فارسی نمایش داده می‌شود.
+        ("group_panel", "panel"), ("settings", "panel"), ("panel", "panel"),
+        ("join_on", "join_on"), ("join_off", "join_off"),
+        ("join_add", "join_add"), ("join_remove", "join_remove"),
+        ("join_list", "join_list"), ("grant_ban", "grant_ban"),
+        ("grant_join", "grant_join"), ("grant_manage", "grant_manage"),
+        ("revoke_ban", "revoke_ban"), ("revoke_join", "revoke_join"),
+        ("revoke_manage", "revoke_manage"), ("ban", "ban"),
+        ("unban", "unban"), ("mute", "mute"), ("unmute", "unmute"),
+    ]
+    for phrase, action in sorted(commands, key=lambda item: len(item[0]), reverse=True):
+        if normalized == phrase:
+            return action, ""
+        if normalized.startswith(phrase + " "):
+            return action, normalized[len(phrase):].strip()
+    return "", ""
+
+
+def is_valid_target_arguments(message: Message, arguments: str) -> bool:
+    """برای جلوگیری از واکنش به جمله‌هایی مثل «بن تو اول چک کن»."""
+    if message.reply_to_message and message.reply_to_message.from_user:
+        return not arguments or arguments.isdigit()
+    return not arguments or arguments.isdigit()
+
+
 def extract_user_id_after_command(text: str) -> int | None:
     """آیدی عددی را از دستور یا پیام ریپلای‌شده استخراج می‌کند."""
     for part in reversed((text or "").strip().split()):
@@ -119,13 +169,7 @@ async def channel_post_handler(message: Message):
 # ═══════════════════════════════════════
 #            دستورهای مستقیم گروه
 # ═══════════════════════════════════════
-@router.message(Command(commands=["panel", "group_panel", "settings"]), F.chat.type.in_(GROUP_TYPES))
-async def group_panel_command(message: Message, bot: Bot):
-    if not message.from_user or not await is_admin_in_group(bot, message.chat.id, message.from_user.id):
-        return
-
-    owner = await is_owner_in_group(bot, message.chat.id, message.from_user.id)
-    await ensure_group_record(message, bot, user_is_owner=owner)
+async def show_group_panel(message: Message, bot: Bot, owner: bool):
     await message.reply(
         "🛠 <b>پنل مدیریت گروه</b>\n\n"
         "این پنل فقط برای مدیران گروه فعال است.",
@@ -154,40 +198,36 @@ async def group_message_handler(message: Message, bot: Bot):
 
     # پیام‌های عادی مدیر هم پردازش نمی‌شوند؛ فقط دستورهای مشخص پایین معتبرند.
     if is_admin and text:
-        name = command_name(text)
+        action, arguments = command_action(text)
 
-        if name in {"grant_ban", "allow_ban", "grant_join", "allow_join", "grant_manage", "allow_manage",
-                    "revoke_ban", "deny_ban", "revoke_join", "deny_join", "revoke_manage", "deny_manage"}:
-            await change_admin_permission(message, bot, owner)
+        # پنل فقط یک فرمان مستقل است؛ «پنل تو اول چک کن» فرمان نیست.
+        if action == "panel":
+            if not arguments:
+                await show_group_panel(message, bot, owner)
             return
 
-        if name in {"join_on", "join_off", "join_add", "join_remove", "join_list"}:
-            await handle_join_command(message, bot)
+        if action in {
+            "grant_ban", "grant_join", "grant_manage",
+            "revoke_ban", "revoke_join", "revoke_manage",
+        }:
+            if is_valid_target_arguments(message, arguments):
+                await change_admin_permission(message, bot, owner, action=action)
             return
 
-        if name in {"ban", "اخراج"}:
-            await handle_ban_command(message, bot)
+        if action in {"join_on", "join_off", "join_add", "join_remove", "join_list"}:
+            await handle_join_command(message, bot, action=action, arguments=arguments)
             return
 
-        if name in {"unban", "رفع_بن"}:
-            await handle_unban_command(message, bot)
-            return
-
-        if name in {"mute", "سکوت"} or text.startswith("سکوت"):
-            await handle_mute_command(message, bot)
-            return
-
-        if name in {"unmute", "رفع_سکوت"} or text.startswith("حذف سکوت"):
-            await handle_unmute_command(message, bot)
-            return
-
-        # دستورهای فارسی تنظیم پنل، در کنار /panel پشتیبانی می‌شوند.
-        if text.strip() in {"پنل", "پنل گروه", "تنظیمات گروه"}:
-            await message.reply(
-                "🛠 <b>پنل مدیریت گروه</b>",
-                reply_markup=group_admin_panel_keyboard(is_owner=owner),
-                parse_mode="HTML",
-            )
+        if action in {"ban", "unban", "mute", "unmute"}:
+            if is_valid_target_arguments(message, arguments):
+                if action == "ban":
+                    await handle_ban_command(message, bot)
+                elif action == "unban":
+                    await handle_unban_command(message, bot)
+                elif action == "mute":
+                    await handle_mute_command(message, bot)
+                else:
+                    await handle_unmute_command(message, bot)
             return
 
     # اعمال اختیاری جوین اجباری گروه به صورت silent؛ برای عضو عادی هیچ
@@ -202,13 +242,12 @@ async def group_message_handler(message: Message, bot: Bot):
                 pass
 
 
-async def change_admin_permission(message: Message, bot: Bot, owner: bool):
+async def change_admin_permission(message: Message, bot: Bot, owner: bool, action: str | None = None):
     if not owner:
         await answer_permission_denied(message)
         return
 
-    name = command_name(message.text or "")
-    parts = (message.text or "").split()
+    name = action or command_name(message.text or "")
     permission_by_command = {
         "grant_ban": "ban", "allow_ban": "ban",
         "grant_join": "join", "allow_join": "join",
@@ -243,8 +282,9 @@ async def change_admin_permission(message: Message, bot: Bot, owner: bool):
         await message.reply(f"✅ دسترسی <b>{permission}</b> از ادمین <code>{target_id}</code> گرفته شد.", parse_mode="HTML")
 
 
-async def handle_join_command(message: Message, bot: Bot):
-    command = command_name(message.text or "")
+async def handle_join_command(message: Message, bot: Bot, action: str | None = None,
+                              arguments: str | None = None):
+    command = action or command_name(message.text or "")
     if not await has_group_permission(bot, message.chat.id, message.from_user.id, "join"):
         await answer_permission_denied(message)
         return
@@ -252,7 +292,7 @@ async def handle_join_command(message: Message, bot: Bot):
     if command == "join_on":
         channels = await db.get_group_channels(message.chat.id)
         if not channels:
-            await message.reply("❌ ابتدا با دستور <code>/join_add @channel</code> یک کانال اضافه کنید.", parse_mode="HTML")
+            await message.reply("❌ ابتدا با دستور <code>جوین اضافه @channel</code> یک کانال اضافه کنید.", parse_mode="HTML")
             return
         await db.set_group_forced_join(message.chat.id, True)
         await message.reply("✅ جوین اجباری این گروه روشن شد.")
@@ -276,13 +316,16 @@ async def handle_join_command(message: Message, bot: Bot):
         await message.reply("\n".join(lines), parse_mode="HTML")
         return
 
-    parts = (message.text or "").split(maxsplit=1)
-    if len(parts) < 2:
-        usage = "/join_add @channel یا /join_remove @channel"
-        await message.reply(f"❌ نام کاربر/کانال را وارد کنید.\nمثال: <code>{usage}</code>", parse_mode="HTML")
-        return
+    if arguments is not None:
+        channel_input = arguments.strip()
+    else:
+        parts = (message.text or "").split(maxsplit=1)
+        channel_input = parts[1].strip() if len(parts) == 2 else ""
 
-    channel_input = parts[1].strip()
+    if not channel_input:
+        usage = "جوین اضافه @channel یا جوین حذف @channel"
+        await message.reply(f"❌ نام کانال را وارد کنید.\nمثال: <code>{usage}</code>", parse_mode="HTML")
+        return
     try:
         chat = await bot.get_chat(channel_input)
         if chat.type not in {"channel", "supergroup"}:
@@ -325,7 +368,7 @@ async def handle_ban_command(message: Message, bot: Bot):
         return
     target_id = target_user_id(message)
     if not target_id:
-        await message.reply("❌ روی پیام کاربر ریپلای کنید یا بنویسید: <code>/ban 123456789</code>", parse_mode="HTML")
+        await message.reply("❌ روی پیام کاربر ریپلای کنید یا بنویسید: <code>بن 123456789</code>", parse_mode="HTML")
         return
     if target_id == message.from_user.id or await is_admin_in_group(bot, message.chat.id, target_id):
         await message.reply("⚠️ نمی‌توان مالک یا ادمین گروه را بن کرد.")
@@ -343,7 +386,7 @@ async def handle_unban_command(message: Message, bot: Bot):
         return
     target_id = target_user_id(message)
     if not target_id:
-        await message.reply("❌ روی پیام کاربر ریپلای کنید یا بنویسید: <code>/unban 123456789</code>", parse_mode="HTML")
+        await message.reply("❌ روی پیام کاربر ریپلای کنید یا بنویسید: <code>رفع بن 123456789</code>", parse_mode="HTML")
         return
     try:
         await bot.unban_chat_member(chat_id=message.chat.id, user_id=target_id, only_if_banned=True)
@@ -361,7 +404,7 @@ async def handle_mute_command(message: Message, bot: Bot):
         return
     target_id = target_user_id(message)
     if not target_id:
-        await message.reply("❌ روی پیام کاربر ریپلای کنید یا بنویسید: <code>/mute 123456789</code>", parse_mode="HTML")
+        await message.reply("❌ روی پیام کاربر ریپلای کنید یا بنویسید: <code>سکوت 123456789</code>", parse_mode="HTML")
         return
     if target_id == message.from_user.id or await is_admin_in_group(bot, message.chat.id, target_id):
         await message.reply("⚠️ نمی‌توان مالک یا ادمین گروه را سکوت کرد.")
@@ -391,7 +434,7 @@ async def handle_unmute_command(message: Message, bot: Bot):
         return
     target_id = target_user_id(message)
     if not target_id:
-        await message.reply("❌ روی پیام کاربر ریپلای کنید یا بنویسید: <code>/unmute 123456789</code>", parse_mode="HTML")
+        await message.reply("❌ روی پیام کاربر ریپلای کنید یا بنویسید: <code>رفع سکوت 123456789</code>", parse_mode="HTML")
         return
     try:
         await bot.restrict_chat_member(
@@ -463,7 +506,7 @@ async def group_panel_callback(callback: CallbackQuery, bot: Bot):
                 await callback.answer("⛔ مجوز مدیریت جوین اجباری را ندارید.", show_alert=True)
                 return
             if sub_action == "on" and not await db.get_group_channels(group_id):
-                await callback.answer("ابتدا با /join_add یک کانال اضافه کنید.", show_alert=True)
+                await callback.answer("ابتدا با «جوین اضافه @channel» یک کانال اضافه کنید.", show_alert=True)
                 return
             await db.set_group_forced_join(group_id, sub_action == "on")
             await callback.answer("✅ وضعیت ذخیره شد.")
@@ -497,21 +540,21 @@ async def group_panel_callback(callback: CallbackQuery, bot: Bot):
             return
 
         if sub_action == "add_help":
-            await callback.answer("برای افزودن: /join_add @channel", show_alert=True)
+            await callback.answer("برای افزودن: جوین اضافه @channel", show_alert=True)
             return
 
     if action[1] == "ban_help":
         if not await has_group_permission(bot, group_id, callback.from_user.id, "ban"):
             await callback.answer("⛔ مجوز بن کاربران را ندارید.", show_alert=True)
             return
-        await callback.answer("روی پیام کاربر ریپلای کنید و /ban یا /unban بفرستید.", show_alert=True)
+        await callback.answer("روی پیام کاربر ریپلای کنید و «بن» یا «رفع بن» بفرستید.", show_alert=True)
         return
 
     if action[1] == "mute_help":
         if not await has_group_permission(bot, group_id, callback.from_user.id, "manage"):
             await callback.answer("⛔ مجوز مدیریت کاربران را ندارید.", show_alert=True)
             return
-        await callback.answer("روی پیام کاربر ریپلای کنید و /mute یا /unmute بفرستید.", show_alert=True)
+        await callback.answer("روی پیام کاربر ریپلای کنید و «سکوت» یا «رفع سکوت» بفرستید.", show_alert=True)
         return
 
     if action[1] == "permissions":
@@ -533,7 +576,7 @@ async def group_panel_callback(callback: CallbackQuery, bot: Bot):
             return
         sub_action = ":".join(action[2:])
         if sub_action in {"add_help", "remove_help"}:
-            prefix = "/grant_ban | /grant_join | /grant_manage" if sub_action == "add_help" else "/revoke_ban | /revoke_join | /revoke_manage"
+            prefix = "اعطای بن | اعطای جوین | اعطای مدیریت" if sub_action == "add_help" else "لغو بن | لغو جوین | لغو مدیریت"
             await callback.answer(f"ریپلای ادمین و ارسال: {prefix}", show_alert=True)
             return
         if sub_action == "list":
