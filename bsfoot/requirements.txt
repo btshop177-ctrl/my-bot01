@@ -1,0 +1,7 @@
+python-telegram-bot
+python-dotenv
+telethon
+python-socks[asyncio]
+httpx
+jdatetime
+pytz
