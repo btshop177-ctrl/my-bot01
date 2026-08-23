@@ -65,6 +65,7 @@ def get_werewolf_panel_buttons(werewolf_mgr):
             data="werewolf_vote_toggle"
         )],
         [Button.inline("🗑 پاکسازی رای‌ها", data="werewolf_vote_clear")],
+        [Button.inline("📖 راهنمای گرگینه", data="werewolf_help")],
         [Button.inline("🔙 بازگشت", data="panel_main")],
     ]
 

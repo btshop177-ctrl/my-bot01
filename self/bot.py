@@ -97,6 +97,14 @@ class BotManager:
                     buttons=get_werewolf_panel_buttons(self.werewolf)
                 )
 
+            elif data == "werewolf_help" and self.werewolf:
+                await event.edit(
+                    self.werewolf.get_help_text(),
+                    buttons=[[Button.inline(
+                        "🔙 بازگشت", data="panel_werewolf"
+                    )]]
+                )
+
             elif data == "panel_close":
                 try:
                     msg_id = event.message_id
