@@ -17,6 +17,8 @@ from bot import BotManager
 from panel import set_bot_username
 from panel_tracker import PanelTracker
 from action import ActionManager, ACTION_MAP, ACTION_DESC
+from werewolf import get_training_response, is_training_command
+from werewolf_game import WerewolfGameManager
 
 load_dotenv()
 
@@ -89,6 +91,9 @@ class ConfigManager:
             "open_panels": [],
             "owner_id": 0,
             "actions_list": [],
+            "werewolf_vote_enabled": False,
+            "werewolf_votes": [],
+            "werewolf_next_group_id": None,
         }
         if os.path.exists(self.filepath):
             with open(self.filepath, "r", encoding="utf-8") as f:
@@ -249,10 +254,21 @@ def is_command(text):
         "اکشن روشن", "اکشن خاموش",
         "لیست اکشن", "پاکسازی اکشن",
         "حذف اکشن",
+        "وضعیت روستا", "وضعيت روستا",
+        "رای روشن", "رای خاموش",
+        "نکست", "next", "لغو نکست", "/nextgame@werewolfbot",
         "راهنما",
     }
 
     if text in exact_commands:
+        return True
+
+    # ─── آموزش نقش‌های گرگینه ───
+    if is_training_command(text):
+        return True
+
+    # ─── رأی خودکار گرگینه ───
+    if text == "رای" or text.startswith("رای "):
         return True
 
     # ─── اکشن [نوع] ───
@@ -654,6 +670,7 @@ async def main():
     spam = SpamManager(user_client, effects, config)
     panel_tracker = PanelTracker(config)
     action = ActionManager(user_client, config)
+    werewolf_game = WerewolfGameManager(user_client, config, owner_id)
 
     # ─── استارت اکشن‌های ذخیره شده ───
     action.start_saved_actions()
@@ -670,7 +687,8 @@ async def main():
     # ─── ساخت مدیر ربات ───
     bot_mgr = BotManager(
         bot_client, config, clock, react, banner, spam,
-        panel_tracker, owner_id, action_mgr=action
+        panel_tracker, owner_id, action_mgr=action,
+        werewolf_mgr=werewolf_game
     )
 
     # ═══════════════════════════════════════
@@ -700,6 +718,15 @@ async def main():
     # ═══════════════════════════════════════
     @user_client.on(events.NewMessage(incoming=True))
     async def incoming_handler(event):
+        # پیام‌ها و منوهای ربات رسمی گرگینه
+        await werewolf_game.handle_bot_message(event)
+
+        # پاسخ عمومی وضعیت فقط در گروه بازی فعال
+        incoming_text = event.raw_text.strip() if event.raw_text else ""
+        if (incoming_text in ("وضعیت روستا", "وضعيت روستا")
+                and event.chat_id == werewolf_game.group_id):
+            await event.reply(werewolf_game.get_village_status())
+
         # ریکت خودکار
         await react.handle_new_message(event)
 
@@ -709,6 +736,11 @@ async def main():
         # اسپم تارگتی
         await spam.handle_target_trigger(event)
 
+    @user_client.on(events.MessageEdited(incoming=True))
+    async def werewolf_edited_handler(event):
+        # صلح‌گرا و اتمام مهلت، متن منوی خصوصی را ویرایش می‌کنند.
+        await werewolf_game.handle_bot_message(event, edited=True)
+
     # ═══════════════════════════════════════
     # هندلر همه دستورات
     # ═══════════════════════════════════════
@@ -716,6 +748,118 @@ async def main():
     async def commands_handler(event):
         text = event.raw_text.strip() if event.raw_text else ""
         if not text:
+            return
+
+        # ═══════════════════════════════════════
+        # روشن و خاموش کردن رأی گرگینه از چت
+        # ═══════════════════════════════════════
+        if text == "رای روشن":
+            await event.edit(werewolf_game.enable_votes())
+            return
+
+        if text == "رای خاموش":
+            await event.edit(werewolf_game.disable_votes())
+            return
+
+        # ═══════════════════════════════════════
+        # انتظار بازی بعدی و ورود خودکار
+        # ═══════════════════════════════════════
+        if text in ("نکست", "next"):
+            try:
+                await event.delete()
+            except Exception:
+                pass
+            if not event.is_group:
+                await user_client.send_message(
+                    "me", "❌ دستور نکست را داخل گروه موردنظر بنویسید."
+                )
+                return
+            werewolf_game.set_next_wait(event.chat_id)
+            await user_client.send_message(
+                event.chat_id, "/nextgame@werewolfbot"
+            )
+            return
+
+        if text == "لغو نکست":
+            group_id = event.chat_id if event.is_group else None
+            try:
+                await event.delete()
+            except Exception:
+                pass
+            success, result = await werewolf_game.cancel_next_wait(group_id)
+            icon = "✅" if success else "❌"
+            await user_client.send_message("me", f"{icon} نکست: {result}")
+            return
+
+        # ═══════════════════════════════════════
+        # وضعیت احتمالی بازی گرگینه
+        # ═══════════════════════════════════════
+        if text in ("وضعیت روستا", "وضعيت روستا"):
+            await event.edit(werewolf_game.get_village_status())
+            return
+
+        # ═══════════════════════════════════════
+        # ثبت رأی خودکار گرگینه
+        # ═══════════════════════════════════════
+        if text == "رای" or text.startswith("رای "):
+            reply = await event.get_reply_message() if event.is_reply else None
+            target_text = text[3:].strip() if len(text) > 3 else ""
+
+            # دستور رأی باید همان لحظه از چت پاک شود.
+            try:
+                await event.delete()
+            except Exception:
+                pass
+
+            if not werewolf_game.is_vote_enabled():
+                await user_client.send_message(
+                    "me", "❌ رأی خودکار خاموش است؛ از پنل گرگینه روشنش کنید."
+                )
+                return
+
+            try:
+                if reply and reply.sender_id:
+                    target_entity = await user_client.get_entity(reply.sender_id)
+                elif target_text:
+                    target = (
+                        int(target_text)
+                        if target_text.lstrip("-").isdigit()
+                        else target_text
+                    )
+                    target_entity = await user_client.get_entity(target)
+                else:
+                    await user_client.send_message(
+                        "me",
+                        "❌ هدف رأی مشخص نیست.\n"
+                        "رای 123456789 | رای @username | رای با ریپلای"
+                    )
+                    return
+
+                target_name = extract_name(target_entity)
+                result = await werewolf_game.register_vote(
+                    target_entity.id, target_name
+                )
+                await user_client.send_message("me", result)
+            except Exception as e:
+                await user_client.send_message(
+                    "me", f"❌ بازیکن برای رأی پیدا نشد: {str(e)[:100]}"
+                )
+            return
+
+        # ═══════════════════════════════════════
+        # دانشنامهٔ نقش‌های گرگینه
+        # ═══════════════════════════════════════
+        training_response = get_training_response(text)
+        if training_response is not None:
+            try:
+                await event.edit(training_response, parse_mode=None)
+            except Exception as e:
+                print(f"❌ خطا در نمایش آموزش نقش: {e}")
+                try:
+                    await event.respond(training_response, parse_mode=None)
+                    await event.delete()
+                except Exception:
+                    pass
             return
 
         # ═══════════════════════════════════════

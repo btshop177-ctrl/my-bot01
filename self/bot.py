@@ -15,6 +15,7 @@ from panel import (
     get_font_panel_text, get_font_panel_buttons,
     get_action_panel_text, get_action_panel_buttons,
     get_help_panel_text, get_help_panel_buttons,
+    get_werewolf_panel_text, get_werewolf_panel_buttons,
     HELP_TEXTS,
 )
 
@@ -22,7 +23,7 @@ from panel import (
 class BotManager:
     def __init__(self, bot_client, config_manager, clock_mgr, react_mgr,
                  banner_mgr, spam_mgr, panel_tracker, owner_id,
-                 action_mgr=None):
+                 action_mgr=None, werewolf_mgr=None):
         self.bot = bot_client
         self.config = config_manager
         self.clock = clock_mgr
@@ -32,6 +33,7 @@ class BotManager:
         self.tracker = panel_tracker
         self.owner_id = owner_id
         self.action = action_mgr
+        self.werewolf = werewolf_mgr
         self.register_handlers()
 
     def register_handlers(self):
@@ -68,6 +70,31 @@ class BotManager:
                 await event.edit(
                     get_main_panel_text(),
                     buttons=get_main_panel_buttons()
+                )
+
+            elif data == "panel_werewolf" and self.werewolf:
+                await event.edit(
+                    get_werewolf_panel_text(self.werewolf),
+                    buttons=get_werewolf_panel_buttons(self.werewolf)
+                )
+
+            elif data == "werewolf_vote_toggle" and self.werewolf:
+                if self.werewolf.is_vote_enabled():
+                    result = self.werewolf.disable_votes()
+                else:
+                    result = self.werewolf.enable_votes()
+                await event.answer(result, alert=True)
+                await event.edit(
+                    get_werewolf_panel_text(self.werewolf),
+                    buttons=get_werewolf_panel_buttons(self.werewolf)
+                )
+
+            elif data == "werewolf_vote_clear" and self.werewolf:
+                self.werewolf.clear_votes()
+                await event.answer("🗑 همهٔ رأی‌ها پاک شدند.", alert=True)
+                await event.edit(
+                    get_werewolf_panel_text(self.werewolf),
+                    buttons=get_werewolf_panel_buttons(self.werewolf)
                 )
 
             elif data == "panel_close":

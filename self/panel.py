@@ -44,7 +44,28 @@ def get_main_panel_buttons():
             Button.inline("🔤 فونت", data="panel_font"),
             Button.inline("📖 راهنما", data="panel_help"),
         ],
+        [Button.inline("🐺 گرگینه", data="panel_werewolf")],
         [Button.inline("❌ بستن پنل", data="panel_close")],
+    ]
+
+
+# ═══════════════════════════════════════
+# پنل گرگینه
+# ═══════════════════════════════════════
+
+def get_werewolf_panel_text(werewolf_mgr):
+    return werewolf_mgr.get_vote_panel_text()
+
+
+def get_werewolf_panel_buttons(werewolf_mgr):
+    vote_on = werewolf_mgr.is_vote_enabled()
+    return [
+        [Button.inline(
+            "🔴 رای" if vote_on else "🟢 رای",
+            data="werewolf_vote_toggle"
+        )],
+        [Button.inline("🗑 پاکسازی رای‌ها", data="werewolf_vote_clear")],
+        [Button.inline("🔙 بازگشت", data="panel_main")],
     ]
 
 
