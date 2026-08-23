@@ -1,24 +1,29 @@
-# Environment / secrets
+# Secrets
 .env
 .env.*
-!.env.example
 
-# Python
+# Telegram sessions
+*.session
+*.session-journal
+sessions/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# Python cache
 __pycache__/
 *.py[cod]
-*.pyo
+
+# PyCharm / IntelliJ
+.idea/
 
 # Virtual environments
 venv/
 .venv/
-
-# Database
-*.db
-*.sqlite
-*.sqlite3
-
-# IDE
-.idea/
 
 # Logs
 *.log
