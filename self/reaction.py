@@ -410,10 +410,7 @@ class ReactionManager:
     async def handle_new_message(self, event):
         """
         هندلر اصلی - بررسی همه پیام‌های ورودی
-        اصلاحات:
-          - استخراج بهتر sender_id
-          - بررسی همزمان user + chat + text (بدون return زودهنگام)
-          - اولویت: user > chat > text
+        اصلاح‌شده: جلوگیری از ارسال چند درخواست همزمان برای یک پیام در صورت خطا
         """
         chat_id = event.chat_id
         msg_text = event.raw_text or ""
@@ -428,12 +425,11 @@ class ReactionManager:
             users = self.config.get("user_reactions", [])
             for u in users:
                 if u["user_id"] == sender_id and u.get("enabled", True):
-                    success = await self._send_auto_react(
+                    reacted = True  # مارک کردن به عنوان پردازش شده
+                    await self._send_auto_react(
                         chat_id, event.id, u["emoji"],
                         f"user:{sender_id}"
                     )
-                    if success:
-                        reacted = True
                     break
 
         # ─── چک ریکت چت/کانال (اولویت دوم) ───
@@ -441,12 +437,11 @@ class ReactionManager:
             chats = self.config.get("chat_reactions", [])
             for c in chats:
                 if c["chat_id"] == chat_id and c.get("enabled", True):
-                    success = await self._send_auto_react(
+                    reacted = True  # مارک کردن به عنوان پردازش شده
+                    await self._send_auto_react(
                         chat_id, event.id, c["emoji"],
                         f"chat:{chat_id}"
                     )
-                    if success:
-                        reacted = True
                     break
 
         # ─── چک ریکت متن خاص (اولویت سوم) ───
@@ -456,14 +451,12 @@ class ReactionManager:
             for t in text_reacts:
                 if t.get("enabled", True):
                     keyword = t["keyword"]
-                    # بررسی: کلمه دقیق یا بخشی از متن
                     if (keyword == msg_text
                             or keyword in msg_words
                             or keyword.lower() in msg_text.lower()):
-                        success = await self._send_auto_react(
+                        reacted = True  # مارک کردن به عنوان پردازش شده
+                        await self._send_auto_react(
                             chat_id, event.id, t["emoji"],
                             f"text:{keyword}"
                         )
-                        if success:
-                            reacted = True
                         break

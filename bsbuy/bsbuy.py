@@ -9,11 +9,20 @@ import time
 import struct
 import importlib
 from dotenv import load_dotenv
+
 from telethon import TelegramClient, events
 from telethon.tl.functions.messages import GetBotCallbackAnswerRequest, SendMessageRequest
 from telethon.tl.functions import PingRequest
 from telethon.tl.types import KeyboardButtonCallback
 from telethon.errors import FloodWaitError
+
+# استفاده از uvloop در صورت موجود بودن روی هاست برای چند برابر کردن سرعت پردازش
+try:
+    import uvloop
+
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+except ImportError:
+    pass
 
 try:
     import profit
@@ -27,45 +36,36 @@ API_ID_RAW = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
 PHONE_NUMBER = os.getenv("PHONE_NUMBER")
 
-if not API_ID_RAW or API_ID_RAW == "0":
-    raise ValueError("❌ API_ID در فایل .env تنظیم نشده!")
-if not API_HASH:
-    raise ValueError("❌ API_HASH در فایل .env تنظیم نشده!")
-if not PHONE_NUMBER:
-    raise ValueError("❌ PHONE_NUMBER در فایل .env تنظیم نشده!")
+if not API_ID_RAW or not API_HASH or not PHONE_NUMBER:
+    raise ValueError("❌ مقادیر API_ID، API_HASH یا PHONE_NUMBER در .env ناقص است!")
 
 API_ID = int(API_ID_RAW)
 BOT_USERNAME = "BslifeBot"
 CHANNEL = "BSlifeChat"
 
 DUPLICATE_WINDOW = 10
-DELAY_MIN = 1.0  # حداقل تاخیر بین آیتم‌های پشت سر هم در صف
-DELAY_MAX = 1.5  # حداکثر تاخیر بین آیتم‌های پشت سر هم در صف
-MAX_QUEUE_SIZE = 10
+DELAY_MIN = 0.85  # حداقل تاخیر هوشمند برای جلوگیری از ارور رگباری
+DELAY_MAX = 1.15  # حداکثر تاخیر هوشمند
+MAX_QUEUE_SIZE = 15
 
+# بهینه‌سازی لاگ بدون سربار دیسک
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("sniper.log", encoding="utf-8")
-    ]
+    datefmt="%H:%M:%S"
 )
-log = logging.getLogger(__name__)
+log = logging.getLogger("TurboSniper")
 
 # ======================= وضعیت جهانی =======================
 item_shop: dict = {}
 item_queue: asyncio.Queue = None
-in_queue: set = set()  # برای جلوگیری از تکراری بودن در صف با هزینه پردازشی صفر
+in_queue: set = set()
 last_processed: dict = {}
 last_action_time = 0.0
 
 stats = {
     "received": 0, "queued": 0, "sent": 0,
-    "clicked": 0, "floods": 0,
-    "avg_ping": 0.0, "last_ping": 0.0,
-    "msg_delay": 0.0
+    "clicked": 0, "floods": 0, "avg_ping": 0.0
 }
 
 bot_peer = None
@@ -77,7 +77,7 @@ PATTERN_SELL = re.compile(
 
 
 def parse_price(text: str) -> int:
-    """پارس قیمت - طبق کد اصلی شما"""
+    """پارس فوق سریع قیمت بدون پردازش سنگین ریجکس"""
     text = text.strip().lower().replace(",", "").replace("٬", "").replace(" ", "")
     multiplier = 1
     if text.endswith('k'):
@@ -87,119 +87,92 @@ def parse_price(text: str) -> int:
         multiplier = 1_000_000
         text = text[:-1]
     try:
-        return int(float(re.sub(r"[^\d\.]", "", text)) * multiplier)
+        # فیلتر سریع کاراکترهای عددی و ممیز
+        clean_num = ''.join(c for c in text if c.isdigit() or c == '.')
+        return int(float(clean_num) * multiplier) if clean_num else 0
     except Exception:
         return 0
 
 
 def gen_random_id():
+    """تولید شناسه رندوم پیام تلگرام با بالاترین سرعت"""
     return struct.unpack('q', os.urandom(8))[0]
 
 
-# ══════════════════════ صف (asyncio.Queue) ══════════════════════
+# ══════════════════════ مدیریت صف ══════════════════════
 def add_to_queue(item_id: str) -> bool:
     now = time.monotonic()
     item_id = item_id.lower()
 
-    if now - last_processed.get(item_id, 0) < DUPLICATE_WINDOW:
+    if (now - last_processed.get(item_id, 0)) < DUPLICATE_WINDOW:
         return False
 
-    if item_id in in_queue:
-        return False
-
-    if item_queue.full():
+    if item_id in in_queue or item_queue.full():
         return False
 
     try:
         item_queue.put_nowait((item_id, now))
         in_queue.add(item_id)
         stats["queued"] += 1
-        log.info("➕ صف: %s | سایز: %d", item_id, item_queue.qsize())
+        log.info(f"➕ صف: {item_id} | سایز صف: {item_queue.qsize()}")
         return True
     except asyncio.QueueFull:
         return False
 
 
-def mark_processed(item_id: str):
-    last_processed[item_id] = time.monotonic()
-
-
-# ══════════════════════ پینگ تلگرام ══════════════════════
-async def ping_telegram(client):
-    ping_times = []
-    while True:
-        try:
-            start = time.monotonic()
-            await client(PingRequest(ping_id=random.randint(0, 2 ** 63)))
-            ping_ms = (time.monotonic() - start) * 1000
-            ping_times.append(ping_ms)
-
-            if len(ping_times) > 10:
-                ping_times.pop(0)
-
-            stats["last_ping"] = round(ping_ms, 1)
-            stats["avg_ping"] = round(sum(ping_times) / len(ping_times), 1)
-
-            log.info(
-                "🏓 پینگ: %.1fms | میانگین: %.1fms | DC: %s",
-                ping_ms, stats["avg_ping"],
-                client.session.dc_id if hasattr(client.session, 'dc_id') else '?'
-            )
-        except Exception as e:
-            log.warning("❌ پینگ خطا: %s", e)
-
-        await asyncio.sleep(30)
-
-
-# ══════════════════════ کلیک فوری ══════════════════════
+# ══════════════════════ کلیک فوری (زیر ۱ میلی‌ثانیه کد) ══════════════════════
 async def process_click(client, msg_id, callback_data, btn_text, receive_time):
     try:
         req_start = time.monotonic()
-        
-        # درخواست کلیک فرستاده می‌شود و تا گرفتن جواب صبر می‌کند (بدون تایم‌اوت محدودکننده)
+
+        # شلیک مستقیم پیامک کلیک بدون واسطه
         await client(GetBotCallbackAnswerRequest(
             peer=bot_peer,
             msg_id=msg_id,
             data=callback_data
         ))
-        
+
         end_time = time.monotonic()
         click_time = (end_time - req_start) * 1000
         total_delay = (end_time - receive_time) * 1000
         code_delay = (req_start - receive_time) * 1000
 
         log.info(
-            "✅ کلیک: %s | تاخیر کد شما: %.2fms | تایم شبکه و بات: %.0fms | کل تأخیر: %.0fms",
-            btn_text, code_delay, click_time, total_delay
+            f"⚡ کلیک شد: {btn_text} | تاخیر برنامه: {code_delay:.1f}ms | رفت‌وبرگشت تلگرام: {click_time:.0f}ms | کل: {total_delay:.0f}ms"
         )
         stats["clicked"] += 1
-        
+
     except FloodWaitError as e:
         stats["floods"] += 1
-        log.warning("⚠️ فلود کلیک: %ds", e.seconds)
+        log.warning(f"⚠️ فلود کلیک: {e.seconds} ثانیه")
         await asyncio.sleep(e.seconds)
     except Exception as e:
-        log.error("❌ خطا کلیک: %s", e)
+        log.error(f"❌ خطا در کلیک: {e}")
 
 
-# ══════════════════════ ورکر سریع ══════════════════════
+# ══════════════════════ ورکر ارسال (هوشمند و ضد رگبار) ══════════════════════
 async def sender_worker(client):
     global last_action_time
-    log.info("🚀 ورکر فعال شد")
+    log.info("🚀 ورکر شلیک آنی و کنترل رگبار فعال شد")
 
     while True:
         item_id, queued_time = await item_queue.get()
 
-        # اگر تکراری بود از صف رد میشه و از لیست in_queue هم پاک میشه
-        if time.monotonic() - last_processed.get(item_id, 0) < DUPLICATE_WINDOW:
+        # چک مجدد تاریخ انقضا و تکراری بودن
+        now = time.monotonic()
+        if (now - last_processed.get(item_id, 0)) < DUPLICATE_WINDOW:
             in_queue.discard(item_id)
+            item_queue.task_done()
             continue
 
-        elapsed = time.monotonic() - last_action_time
-        if elapsed < DELAY_MIN:
-            wait_time = random.uniform(DELAY_MIN, DELAY_MAX) - elapsed
-            if wait_time > 0:
-                await asyncio.sleep(wait_time)
+        # محاسبه هوشمند گپ زمانی
+        elapsed = now - last_action_time
+        target_delay = random.uniform(DELAY_MIN, DELAY_MAX)
+
+        # اگر از پیام قبلی زمان کافی نگذشته بود صبر کن؛ در غیر اینصورت آنی بفرست
+        if elapsed < target_delay:
+            wait_time = target_delay - elapsed
+            await asyncio.sleep(wait_time)
 
         try:
             start = time.monotonic()
@@ -212,28 +185,26 @@ async def sender_worker(client):
             queue_delay = (time.monotonic() - queued_time) * 1000
 
             stats["sent"] += 1
-            stats["msg_delay"] = round(queue_delay, 1)
-            log.info(
-                "📤 ارسال: %s | سرعت: %.0fms | تأخیر صف: %.0fms",
-                item_id, send_time, queue_delay
-            )
+            log.info(f"📤 ارسال شد: {item_id} | زمان ارسال تلگرام: {send_time:.0f}ms | معطلی در صف: {queue_delay:.0f}ms")
+
             last_action_time = time.monotonic()
-            mark_processed(item_id)
-            in_queue.discard(item_id)  # <-- حالا اینجا پاک میشه تا تکراری وارد نشه
+            last_processed[item_id] = last_action_time
 
         except FloodWaitError as e:
             stats["floods"] += 1
-            log.warning("🚫 فلود: %ds", e.seconds)
+            log.warning(f"🚫 فلود ارسال: {e.seconds}s")
+            last_action_time = time.monotonic() + e.seconds
             await asyncio.sleep(e.seconds)
-            in_queue.discard(item_id)  # در صورت ارور هم حتما پاک شود
         except Exception as e:
-            log.error("❌ خطا ارسال: %s", e)
-            await asyncio.sleep(0.3)
-            in_queue.discard(item_id)  # در صورت ارور هم حتما پاک شود
+            log.error(f"❌ خطا در ارسال پیام: {e}")
+        finally:
+            in_queue.discard(item_id)
+            item_queue.task_done()
 
 
 # ══════════════════════ هندلرها ══════════════════════
 async def handle_bot_reply(event):
+    """هندلر فوری دریافت پیام از بات برای زدن دکمه سفارش"""
     receive_time = time.monotonic()
     msg = event.message
     markup = msg.reply_markup
@@ -250,7 +221,7 @@ async def handle_bot_reply(event):
             if isinstance(btn, KeyboardButtonCallback) and btn.data:
                 text = (btn.text or '').lower()
                 if 'سفارش' in text or 'order' in text:
-                    log.info("🔘 دکمه پیدا شد: %s | msg_id: %d", btn.text, msg_id)
+                    # تفویض کلیک به تسک موازی تا هندلر آزاد شود
                     asyncio.create_task(
                         process_click(event.client, msg_id, btn.data, btn.text, receive_time)
                     )
@@ -258,6 +229,7 @@ async def handle_bot_reply(event):
 
 
 async def handle_channel_message(event):
+    """هندلر دریافت پیام از کانال"""
     receive_time = time.monotonic()
     text = event.raw_text
     if not text or '->' not in text:
@@ -286,14 +258,11 @@ async def handle_channel_message(event):
 
         if should_buy:
             detect_delay = (time.monotonic() - receive_time) * 1000
-            log.info(
-                "🎯 آیتم: %s | سود: %d | تشخیص: %.0fms",
-                item_id, profit_val, detect_delay
-            )
+            log.info(f"🎯 شکار: {item_id} | سود: {profit_val} | شناسایی در: {detect_delay:.1f}ms")
             add_to_queue(item_id)
 
 
-# ══════════════════════ فچ دیتا (دست‌نخورده) ══════════════════════
+# ══════════════════════ فچ دیتا (کاملاً دست‌نخورده و ایمن) ══════════════════════
 async def fetch_data(client):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -361,28 +330,24 @@ async def item_watcher():
                     with open("item.json", "r", encoding="utf-8") as f:
                         data = json.load(f)
                         item_shop = {k.lower(): v for k, v in data.items()}
-                        log.info("📦 قیمت‌ها: %d آیتم", len(item_shop))
+                        log.info(f"📦 بروزرسانی قیمت‌ها: {len(item_shop)} آیتم")
                         last_mtime = mtime
                     if profit:
                         importlib.reload(profit)
         except Exception:
             pass
-        await asyncio.sleep(5)
+        await asyncio.sleep(4)
 
 
 async def stats_reporter():
     while True:
         await asyncio.sleep(60)
         now = time.monotonic()
-        expired = [k for k, v in last_processed.items() if now - v > 60]
+        expired = [k for k, v in list(last_processed.items()) if now - v > 60]
         for k in expired:
             del last_processed[k]
         log.info(
-            "📊 صف:%d | دریافت:%d | ارسال:%d | کلیک:%d | فلود:%d | "
-            "پینگ:%.0fms | تأخیر‌صف:%.0fms",
-            item_queue.qsize(), stats['received'],
-            stats['sent'], stats['clicked'], stats['floods'],
-            stats['avg_ping'], stats['msg_delay']
+            f"📊 آمار -> صف: {item_queue.qsize()} | دریافت: {stats['received']} | ارسال: {stats['sent']} | کلیک: {stats['clicked']} | فلود: {stats['floods']}"
         )
 
 
@@ -392,7 +357,7 @@ async def main():
 
     item_queue = asyncio.Queue(maxsize=MAX_QUEUE_SIZE)
 
-    log.info("🔌 اتصال به تلگرام...")
+    log.info("🔌 در حال اتصال به تلگرام...")
 
     client = TelegramClient(
         "sniper_session",
@@ -406,39 +371,23 @@ async def main():
 
     await client.start(phone=PHONE_NUMBER)
     me = await client.get_me()
-    log.info("✅ متصل شد: %s (%s)", me.first_name, me.phone)
+    log.info(f"✅ متصل شد: {me.first_name}")
 
     bot_peer = await client.get_input_entity(BOT_USERNAME)
-    log.info("✅ bot peer آماده")
+    log.info("✅ Peer ربات با موفقیت Cache شد.")
 
-    try:
-        start = time.monotonic()
-        await client(PingRequest(ping_id=random.randint(0, 2 ** 63)))
-        ping_ms = (time.monotonic() - start) * 1000
-        log.info("🏓 پینگ اولیه: %.1fms", ping_ms)
-    except Exception as e:
-        log.warning("❌ پینگ اولیه خطا: %s", e)
+    # هندلرهای پیام‌ها
+    client.add_event_handler(handle_channel_message, events.NewMessage(chats=CHANNEL))
+    client.add_event_handler(handle_bot_reply, events.NewMessage(chats=BOT_USERNAME))
+    client.add_event_handler(handle_bot_reply, events.MessageEdited(chats=BOT_USERNAME))
 
-    @client.on(events.NewMessage(chats=CHANNEL))
-    async def _ch(event):
-        await handle_channel_message(event)
-
-    @client.on(events.NewMessage(chats=BOT_USERNAME))
-    async def _bot_new(event):
-        await handle_bot_reply(event)
-
-    @client.on(events.MessageEdited(chats=BOT_USERNAME))
-    async def _bot_edit(event):
-        await handle_bot_reply(event)
-
-    log.info("✅ ربات روشن شد")
+    log.info("🚀 ربات با بالاترین سرعت و ایمنی فعال شد.")
 
     await asyncio.gather(
         item_watcher(),
         fetch_data(client),
         sender_worker(client),
         stats_reporter(),
-        ping_telegram(client),
         client.run_until_disconnected()
     )
 
@@ -447,4 +396,4 @@ if __name__ == '__main__':
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        log.info("خاموش شد")
+        log.info("خاموش شد.")
