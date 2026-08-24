@@ -901,11 +901,10 @@ async def main():
                     target_text = text[len(prefix):].strip()
                     break
             try:
-                # این خط را اصلاح کنید:
                 target_id, target_name = await resolve_vote_target(
                     user_client, event.chat_id, target_text, reply
                 )
-                result = werewolf_game.register_trouble_vote(
+                result = await werewolf_game.register_trouble_vote(
                     event.chat_id, slot, target_id, target_name
                 )
                 await event.edit(result)

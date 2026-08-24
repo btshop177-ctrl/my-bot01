@@ -180,6 +180,7 @@ def get_werewolf_votes_text(werewolf_mgr):
         text += "📭 هیچ رأیی ثبت نشده.\n\n"
 
     text += (
+        "**🗑 حذف:** دکمهٔ حذف هر رأی زیر همین لیست است.\n\n"
         "**دستورات:**\n"
         "`رای` + ریپلای | `رای @user`\n"
         "`حذف رای 1` | `تغییر رای 1 @user`\n"
@@ -190,16 +191,52 @@ def get_werewolf_votes_text(werewolf_mgr):
 
 
 def get_werewolf_votes_buttons(werewolf_mgr):
-    """دکمه‌های صفحه رأی‌ها"""
+    """دکمه‌های صفحه رأی‌ها — حذف تک‌تک رأی‌ها همین‌جاست."""
+    rows = []
+
+    # دکمهٔ حذف برای هر رأی (به تفکیک گروه)
+    for gid, state in werewolf_mgr.games.items():
+        if not (state.get("owner_joined") or state.get("manual")):
+            continue
+        normal = list(state.get("normal_votes", []))
+        trouble = state.get("trouble_votes", [None, None])
+        if not normal and not any(trouble):
+            continue
+
+        row = []
+        for i, v in enumerate(normal, 1):
+            vname = (v.get("name") or "")[:12]
+            row.append(Button.inline(
+                f"🗑 {i} • {vname}",
+                data=f"wv_del_{gid}_{i}"
+            ))
+            if len(row) == 2:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+
+        trow = []
+        for i, tv in enumerate(trouble, 1):
+            if tv:
+                tname = (tv.get("name") or "")[:10]
+                trow.append(Button.inline(
+                    f"🗑 درد {i} • {tname}",
+                    data=f"wv_tdel_{gid}_{i}"
+                ))
+        if trow:
+            rows.append(trow)
+
     vote_on = werewolf_mgr.is_vote_enabled()
-    return [
-        [Button.inline(
+    rows.append([
+        Button.inline(
             "🔴 خاموش کردن رأی" if vote_on else "🟢 روشن کردن رأی",
             data="werewolf_vote_toggle"
-        )],
-        [Button.inline("🗑 پاکسازی همه رأی‌ها", data="werewolf_vote_clear")],
-        [Button.inline("🔙 بازگشت", data="panel_werewolf")],
-    ]
+        )
+    ])
+    rows.append([Button.inline("🗑 پاکسازی همه رأی‌ها", data="werewolf_vote_clear")])
+    rows.append([Button.inline("🔙 بازگشت", data="panel_werewolf")])
+    return rows
 
 
 # ═══════════════════════════════════════
