@@ -271,6 +271,70 @@ class BotManager:
                 )
 
 
+            # ─── حذف یک رأی عادی (wv_del_<gid>_<idx>) ───
+
+            elif data.startswith("wv_del_") and self.werewolf:
+
+                try:
+
+                    payload = data[len("wv_del_"):]
+
+                    gid_str, idx_str = payload.rsplit("_", 1)
+
+                    gid, idx = int(gid_str), int(idx_str)
+
+                except ValueError:
+
+                    return
+
+                result = self.werewolf.remove_vote(gid, idx)
+
+                try:
+                    await event.answer(result, alert=True)
+                except Exception:
+                    pass
+
+                await safe_edit(
+
+                    get_werewolf_votes_text(self.werewolf),
+
+                    buttons=get_werewolf_votes_buttons(self.werewolf)
+
+                )
+
+
+            # ─── حذف یک رأی دردسر (wv_tdel_<gid>_<slot>) ───
+
+            elif data.startswith("wv_tdel_") and self.werewolf:
+
+                try:
+
+                    payload = data[len("wv_tdel_"):]
+
+                    gid_str, slot_str = payload.rsplit("_", 1)
+
+                    gid, slot = int(gid_str), int(slot_str)
+
+                except ValueError:
+
+                    return
+
+                result = self.werewolf.remove_trouble_vote(gid, slot)
+
+                try:
+                    await event.answer(result, alert=True)
+                except Exception:
+                    pass
+
+                await safe_edit(
+
+                    get_werewolf_votes_text(self.werewolf),
+
+                    buttons=get_werewolf_votes_buttons(self.werewolf)
+
+                )
+
+
             # ─── راهنما ───
 
             elif data == "werewolf_help" and self.werewolf:
