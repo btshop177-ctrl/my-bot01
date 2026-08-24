@@ -17,6 +17,15 @@ from bot import BotManager
 from panel import set_bot_username
 from panel_tracker import PanelTracker
 from action import ActionManager, ACTION_MAP, ACTION_DESC
+from werewolf import get_training_response, is_training_command
+from werewolf_game import (
+    WerewolfGameManager,
+    VALID_TARGET_RE,
+    is_vote_registration,
+    is_trouble_vote_registration,
+    parse_trouble_slot,
+    parse_vote_index_command,
+)
 
 load_dotenv()
 
@@ -89,6 +98,11 @@ class ConfigManager:
             "open_panels": [],
             "owner_id": 0,
             "actions_list": [],
+            "werewolf_vote_enabled": False,
+            "werewolf_votes": [],
+            "werewolf_game_votes": {},
+            "werewolf_next_group_id": None,
+            "werewolf_next_group_ids": [],
         }
         if os.path.exists(self.filepath):
             with open(self.filepath, "r", encoding="utf-8") as f:
@@ -249,10 +263,28 @@ def is_command(text):
         "اکشن روشن", "اکشن خاموش",
         "لیست اکشن", "پاکسازی اکشن",
         "حذف اکشن",
+        "وضعیت روستا", "وضعيت روستا",
+        "رای", "رای روشن", "رای خاموش",
+        "گرگینه", "حذف گرگینه",
+        "نکست", "next", "لغو نکست", "/nextgame@werewolfbot",
+        "/startgame", "/startchaos",
+        "/startgame@werewolfbot", "/startchaos@werewolfbot",
         "راهنما",
     }
 
     if text in exact_commands:
+        return True
+
+    # ─── آموزش نقش‌های گرگینه ───
+    if is_training_command(text):
+        return True
+
+    # ─── رأی خودکار گرگینه ───
+    if is_trouble_vote_registration(text):
+        return True
+    if text.startswith("حذف رای درد"):
+        return True
+    if text.startswith("تغییر رای درد"):
         return True
 
     # ─── اکشن [نوع] ───
@@ -626,6 +658,35 @@ else:
     bot_client = TelegramClient("bot_session", API_ID, API_HASH)
 
 
+async def resolve_vote_target(client, chat_id, target_text="", reply=None):
+    """
+    پیدا کردن آیدی عددی و نام هدف از روی ریپلای، یوزرنیم یا آیدی عددی.
+    نسخه بهینه شده و عمومی با سرعت بالا بدون کرش.
+    """
+    if reply and reply.sender_id:
+        try:
+            entity = await client.get_entity(reply.sender_id)
+            return entity.id, extract_name(entity)
+        except:
+            return reply.sender_id, str(reply.sender_id)
+
+    target_text = target_text.strip()
+    if target_text.isdigit():
+        return int(target_text), target_text
+
+    # تلاش اول: استفاده از کش تلگرام
+    try:
+        entity = await client.get_entity(target_text)
+        return entity.id, extract_name(entity)
+    except Exception as e:
+        # تلاش دوم در صورت نبودن در کش: سرچ سریع در اعضای گروه
+        try:
+            async for user in client.iter_participants(chat_id, search=target_text):
+                return user.id, extract_name(user)
+        except:
+            pass
+        raise e
+
 async def main():
     await user_client.start(phone=PHONE_NUMBER)
     await bot_client.start(bot_token=BOT_TOKEN)
@@ -654,6 +715,13 @@ async def main():
     spam = SpamManager(user_client, effects, config)
     panel_tracker = PanelTracker(config)
     action = ActionManager(user_client, config)
+    owner_full_name = f"{me.first_name or ''} {me.last_name or ''}".strip()
+    werewolf_game = WerewolfGameManager(
+        user_client,
+        config,
+        owner_id,
+        owner_names=(owner_full_name, me.first_name, me.username),
+    )
 
     # ─── استارت اکشن‌های ذخیره شده ───
     action.start_saved_actions()
@@ -670,7 +738,8 @@ async def main():
     # ─── ساخت مدیر ربات ───
     bot_mgr = BotManager(
         bot_client, config, clock, react, banner, spam,
-        panel_tracker, owner_id, action_mgr=action
+        panel_tracker, owner_id, action_mgr=action,
+        werewolf_mgr=werewolf_game
     )
 
     # ═══════════════════════════════════════
@@ -698,16 +767,50 @@ async def main():
     # ═══════════════════════════════════════
     # هندلر ریکت + اکشن + اسپم متنی (پیام‌های ورودی)
     # ═══════════════════════════════════════
+    # ═══════════════════════════════════════
+    # هندلر ریکت + اکشن + اسپم متنی (پیام‌های ورودی) - نسخه اصلاح شده و امن
+    # ═══════════════════════════════════════
     @user_client.on(events.NewMessage(incoming=True))
     async def incoming_handler(event):
-        # ریکت خودکار
-        await react.handle_new_message(event)
+        # ۱. مدیریت پیام گرگینه (کاملاً مجزا در try-except برای جلوگیری از بلاک شدن بقیه تسک‌ها)
+        try:
+            await werewolf_game.handle_bot_message(event)
+        except Exception as e:
+            print(f"❌ خطا در پردازش پیام ربات گرگینه: {e}")
 
-        # اسپم متنی (تریگر)
-        await spam.handle_text_trigger(event)
+        # ۲. پاسخ عمومی وضعیت فقط در گروه بازی فعال
+        try:
+            incoming_text = event.raw_text.strip() if event.raw_text else ""
+            if (incoming_text in ("وضعیت روستا", "وضعيت روستا")
+                    and werewolf_game.is_tracked_group(event.chat_id)):
+                await event.reply(
+                    werewolf_game.get_village_status(event.chat_id)
+                )
+        except Exception as e:
+            print(f"❌ خطا در ارسال وضعیت روستا: {e}")
 
-        # اسپم تارگتی
-        await spam.handle_target_trigger(event)
+        # ۳. ریکت خودکار (مجزا و امن)
+        try:
+            await react.handle_new_message(event)
+        except Exception as e:
+            print(f"❌ خطا در ریکت خودکار: {e}")
+
+        # ۴. اسپم متنی (تریگر)
+        try:
+            await spam.handle_text_trigger(event)
+        except Exception as e:
+            print(f"❌ خطا در اسپم متنی: {e}")
+
+        # ۵. اسپم تارگتی
+        try:
+            await spam.handle_target_trigger(event)
+        except Exception as e:
+            print(f"❌ خطا در اسپم تارگتی: {e}")
+
+    @user_client.on(events.MessageEdited(incoming=True))
+    async def werewolf_edited_handler(event):
+        # صلح‌گرا و اتمام مهلت، متن منوی خصوصی را ویرایش می‌کنند.
+        await werewolf_game.handle_bot_message(event, edited=True)
 
     # ═══════════════════════════════════════
     # هندلر همه دستورات
@@ -716,6 +819,205 @@ async def main():
     async def commands_handler(event):
         text = event.raw_text.strip() if event.raw_text else ""
         if not text:
+            return
+
+        # دستورات واقعی شروع را فقط علامت‌گذاری می‌کنیم تا پیام نزدیک ربات
+        # و لیست #players همان گروه پیدا شود؛ خود دستور دست‌نخورده می‌ماند.
+        if text.lower() in (
+            "/startchaos", "/startchaos@werewolfbot",
+            "/startgame", "/startgame@werewolfbot",
+        ):
+            await werewolf_game.handle_bot_message(event)
+            return
+
+        # ═══════════════════════════════════════
+        # فعال‌سازی ساده گرگینه
+        # ═══════════════════════════════════════
+        if text == "گرگینه":
+            if not event.is_group:
+                await event.edit("❌ این دستور فقط داخل گروه.")
+            else:
+                try:
+                    entity = await user_client.get_entity(event.chat_id)
+                    group_name = extract_name(entity)
+                except:
+                    group_name = str(event.chat_id)
+                await event.edit(
+                    werewolf_game.track_group_manually(
+                        event.chat_id,
+                        group_name=group_name
+                    )
+                )
+            return
+
+        # ── حذف (سازگار با قبلی و جدید) ──
+        if text in ("حذف گرگینه", "گرگینه حذف"):
+            await event.edit(werewolf_game.untrack_group(event.chat_id))
+            return
+
+        # ═══════════════════════════════════════
+        # رأی دردسر
+        # ═══════════════════════════════════════
+        if text.startswith("حذف رای درد"):
+            rest = text.replace("حذف رای درد", "").strip()
+            slot = int(rest) if rest in ("1", "2") else 1
+            await event.edit(werewolf_game.remove_trouble_vote(event.chat_id, slot))
+            return
+
+        if text.startswith("تغییر رای درد"):
+            parts = text.split(maxsplit=4)
+            # تغییر رای درد 1 @target
+            slot = 1
+            target_text = ""
+            if len(parts) >= 4 and parts[3] in ("1", "2"):
+                slot = int(parts[3])
+                target_text = parts[4].strip() if len(parts) == 5 else ""
+            elif len(parts) >= 4:
+                target_text = parts[3].strip()
+
+            reply = await event.get_reply_message() if event.is_reply else None
+            try:
+                # این خط را اصلاح کنید:
+                target_id, target_name = await resolve_vote_target(
+                    user_client, event.chat_id, target_text, reply
+                )
+                await event.edit(werewolf_game.change_trouble_vote(
+                    event.chat_id, slot, target_id, target_name
+                ))
+            except Exception as e:
+                await event.edit(f"❌ شخص پیدا نشد: {str(e)[:80]}")
+            return
+
+        if is_trouble_vote_registration(text, event.is_reply):
+            if not werewolf_game.is_vote_enabled():
+                await event.edit("❌ رأی خودکار خاموش است؛ `رای روشن`")
+                return
+            slot = parse_trouble_slot(text)
+            reply = await event.get_reply_message() if event.is_reply else None
+            # استخراج تارگت از متن
+            target_text = ""
+            for prefix in ("رای درد 1 ", "رای درد 2 ", "رای درد "):
+                if text.startswith(prefix) and not event.is_reply:
+                    target_text = text[len(prefix):].strip()
+                    break
+            try:
+                # این خط را اصلاح کنید:
+                target_id, target_name = await resolve_vote_target(
+                    user_client, event.chat_id, target_text, reply
+                )
+                result = werewolf_game.register_trouble_vote(
+                    event.chat_id, slot, target_id, target_name
+                )
+                await event.edit(result)
+            except Exception as e:
+                await event.edit(f"❌ شخص پیدا نشد: {str(e)[:80]}")
+            return
+
+        if text == "رای روشن":
+            await event.edit(werewolf_game.enable_votes())
+            return
+
+        if text == "رای خاموش":
+            await event.edit(werewolf_game.disable_votes())
+            return
+
+        # ═══════════════════════════════════════
+        # انتظار بازی بعدی و ورود خودکار
+        # ═══════════════════════════════════════
+        if text in ("نکست", "next"):
+            if not event.is_group:
+                await event.edit("❌ دستور نکست را داخل گروه موردنظر بنویسید.")
+                return
+            werewolf_game.set_next_wait(event.chat_id)
+            await event.delete()
+            await user_client.send_message(event.chat_id, "/nextgame@werewolfbot")
+            return
+
+        if text == "لغو نکست":
+            group_id = event.chat_id if event.is_group else None
+            success, result = await werewolf_game.cancel_next_wait(group_id)
+            icon = "✅" if success else "❌"
+            await event.edit(f"{icon} نکست: {result}")
+            return
+
+        # ═══════════════════════════════════════
+        # وضعیت احتمالی بازی گرگینه
+        # ═══════════════════════════════════════
+        if text in ("وضعیت روستا", "وضعيت روستا"):
+            await event.edit(
+                werewolf_game.get_village_status(event.chat_id)
+            )
+            return
+
+        # حذف رأی با شمارهٔ ترتیبی
+        remove_index = parse_vote_index_command(text, "حذف رای")
+        if remove_index is not None:
+            await event.edit(
+                werewolf_game.remove_vote(event.chat_id, remove_index)
+            )
+            return
+
+        # تغییر رأی با شماره؛ هدف یا آرگومان است یا ریپلای.
+        change_index = parse_vote_index_command(text, "تغییر رای")
+        if change_index is not None:
+            parts = text.split(maxsplit=3)
+            target_text = parts[3].strip() if len(parts) == 4 else ""
+            reply = await event.get_reply_message() if event.is_reply else None
+            if not ((reply and text == f"تغییر رای {change_index}")
+                    or (not reply and VALID_TARGET_RE.fullmatch(target_text))):
+                await event.edit(
+                    "❌ فرمت: تغییر رای 2 @username\n"
+                    "یا «تغییر رای 2» را روی پیام شخص ریپلای کنید."
+                )
+                return
+            try:
+                # این خط را اصلاح کنید:
+                target_id, target_name = await resolve_vote_target(
+                    user_client, event.chat_id, target_text, reply
+                )
+                await event.edit(werewolf_game.change_vote(
+                    event.chat_id, change_index, target_id, target_name
+                ))
+            except Exception as e:
+                await event.edit(f"❌ شخص پیدا نشد: {str(e)[:80]}")
+            return
+
+        # فقط «رای» خالیِ ریپلای‌شده یا «رای ID/@username» معتبر است.
+        if is_vote_registration(text, event.is_reply):
+            if not werewolf_game.is_vote_enabled():
+                await event.edit(
+                    "❌ رأی خودکار خاموش است؛ «رای روشن» را بزنید."
+                )
+                return
+            reply = await event.get_reply_message() if event.is_reply else None
+            target_text = text[4:].strip() if not event.is_reply else ""
+            try:
+                # این خط را اصلاح کنید:
+                target_id, target_name = await resolve_vote_target(
+                    user_client, event.chat_id, target_text, reply
+                )
+                result = await werewolf_game.register_vote(
+                    event.chat_id, target_id, target_name
+                )
+                await event.edit(result)
+            except Exception as e:
+                await event.edit(f"❌ شخص پیدا نشد: {str(e)[:80]}")
+            return
+
+        # ═══════════════════════════════════════
+        # دانشنامهٔ نقش‌های گرگینه
+        # ═══════════════════════════════════════
+        training_response = get_training_response(text)
+        if training_response is not None:
+            try:
+                await event.edit(training_response, parse_mode=None)
+            except Exception as e:
+                print(f"❌ خطا در نمایش آموزش نقش: {e}")
+                try:
+                    await event.respond(training_response, parse_mode=None)
+                    await event.delete()
+                except Exception:
+                    pass
             return
 
         # ═══════════════════════════════════════

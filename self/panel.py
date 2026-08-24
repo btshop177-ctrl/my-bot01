@@ -44,7 +44,161 @@ def get_main_panel_buttons():
             Button.inline("🔤 فونت", data="panel_font"),
             Button.inline("📖 راهنما", data="panel_help"),
         ],
+        [Button.inline("🐺 گرگینه", data="panel_werewolf")],
         [Button.inline("❌ بستن پنل", data="panel_close")],
+    ]
+
+
+# ═══════════════════════════════════════
+# پنل گرگینه
+# ═══════════════════════════════════════
+
+# ═══════════════════════════════════════
+# پنل گرگینه - نسخه کامل با مدیریت گروه‌ها
+# ═══════════════════════════════════════
+
+def get_werewolf_panel_text(werewolf_mgr):
+    """متن اصلی پنل گرگینه با لیست گروه‌ها و ربات‌ها"""
+    vote_status = "🟢 روشن" if werewolf_mgr.is_vote_enabled() else "🔴 خاموش"
+
+    # لیست گروه‌های ثبت‌شده
+    tracked_groups = []
+    for gid, state in werewolf_mgr.games.items():
+        if state.get("owner_joined") or state.get("manual"):
+            mode = state.get("mode", "نامشخص")
+            mode_fa = {"normal": "معمولی", "chaos": "آشوب"}.get(mode, "نامشخص")
+            bot_name = state.get("bot_name", "werewolfbot")
+            normal_count = len(state.get("normal_votes", []))
+            trouble_count = sum(1 for v in state.get("trouble_votes", [None, None]) if v)
+            tracked_groups.append({
+                "id": gid,
+                "name": state.get("group_name", str(gid)),
+                "mode": mode_fa,
+                "bot": bot_name,
+                "enabled": state.get("enabled", True),
+                "normal": normal_count,
+                "trouble": trouble_count,
+            })
+
+    text = "🐺 **پنل گرگینه**\n\n"
+    text += f"  ▸ رأی خودکار: {vote_status}\n"
+    text += f"  ▸ گروه‌ها: `{len(tracked_groups)}`\n\n"
+
+    if tracked_groups:
+        text += "**گروه‌های ثبت‌شده:**\n"
+        for i, g in enumerate(tracked_groups, 1):
+            status = "🟢" if g["enabled"] else "🔴"
+            text += (
+                f"  {status} `{i}` **{g['name']}**\n"
+                f"       ربات: `@{g['bot']}`\n"
+                f"       رأی: `{g['normal']}` عادی"
+            )
+            if g["trouble"]:
+                text += f" + `{g['trouble']}` دردسر"
+            text += "\n\n"
+    else:
+        text += (
+            "📭 هیچ گروهی ثبت نشده.\n"
+            "در گروه موردنظر بنویسید: `گرگینه`\n\n"
+        )
+
+    return text
+
+
+def get_werewolf_panel_buttons(werewolf_mgr):
+    """دکمه‌های پنل اصلی گرگینه"""
+    rows = []
+
+    # دکمه‌های مدیریت هر گروه
+    tracked = [
+        (gid, state) for gid, state in werewolf_mgr.games.items()
+        if state.get("owner_joined") or state.get("manual")
+    ]
+
+    if tracked:
+        for gid, state in tracked:
+            name = state.get("group_name", str(gid))
+            short_name = name[:14] + ".." if len(name) > 16 else name
+            enabled = state.get("enabled", True)
+            status = "🟢" if enabled else "🔴"
+            rows.append([
+                Button.inline(
+                    f"{status} {short_name}",
+                    data=f"wg_toggle_{gid}"
+                ),
+                Button.inline(
+                    "🗑",
+                    data=f"wg_delete_{gid}"
+                ),
+            ])
+
+    # دکمه رأی‌ها
+    rows.append([
+        Button.inline("🗳 رأی‌ها", data="werewolf_votes"),
+    ])
+
+    rows.append([
+        Button.inline("📖 راهنما", data="werewolf_help"),
+    ])
+
+    rows.append([Button.inline("🔙 بازگشت", data="panel_main")])
+    return rows
+
+
+def get_werewolf_votes_text(werewolf_mgr):
+    """متن صفحه رأی‌ها"""
+    vote_status = "🟢 روشن" if werewolf_mgr.is_vote_enabled() else "🔴 خاموش"
+
+    text = f"🗳 **مدیریت رأی‌ها**\n\n"
+    text += f"  ▸ رأی خودکار: {vote_status}\n\n"
+
+    has_votes = False
+    for gid, state in werewolf_mgr.games.items():
+        if not (state.get("owner_joined") or state.get("manual")):
+            continue
+        normal = list(state.get("normal_votes", []))
+        trouble = state.get("trouble_votes", [None, None])
+
+        if not normal and not any(trouble):
+            continue
+
+        has_votes = True
+        name = state.get("group_name", str(gid))
+        text += f"💬 **{name}**:\n"
+
+        if normal:
+            text += "  **رأی‌های عادی:**\n"
+            for i, v in enumerate(normal, 1):
+                text += f"    `{i}` → {v['name']}\n"
+
+        for i, tv in enumerate(trouble, 1):
+            if tv:
+                text += f"  🤯 **درد {i}:** {tv['name']}\n"
+        text += "\n"
+
+    if not has_votes:
+        text += "📭 هیچ رأیی ثبت نشده.\n\n"
+
+    text += (
+        "**دستورات:**\n"
+        "`رای` + ریپلای | `رای @user`\n"
+        "`حذف رای 1` | `تغییر رای 1 @user`\n"
+        "`رای درد 1 @user` | `حذف رای درد 1`\n"
+    )
+
+    return text
+
+
+def get_werewolf_votes_buttons(werewolf_mgr):
+    """دکمه‌های صفحه رأی‌ها"""
+    vote_on = werewolf_mgr.is_vote_enabled()
+    return [
+        [Button.inline(
+            "🔴 خاموش کردن رأی" if vote_on else "🟢 روشن کردن رأی",
+            data="werewolf_vote_toggle"
+        )],
+        [Button.inline("🗑 پاکسازی همه رأی‌ها", data="werewolf_vote_clear")],
+        [Button.inline("🔙 بازگشت", data="panel_werewolf")],
     ]
 
 

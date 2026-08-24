@@ -1,132 +1,36 @@
 {
-  "clock_enabled": true,
+  "clock_enabled": false,
   "clock_bio_enabled": false,
   "bio_text": "",
   "clock_font": 9,
-  "user_reactions": [
-    {
-      "user_id": 6990187779,
-      "emoji": "❤️",
-      "user_name": "Matin",
-      "enabled": true
-    },
-    {
-      "user_id": 6958501715,
-      "emoji": "❤️",
-      "user_name": "𝑫𝒂𝒏𝒊",
-      "enabled": true
-    },
-    {
-      "user_id": 8944291576,
-      "emoji": "🍌",
-      "user_name": "Moziw 🍌",
-      "enabled": true
-    },
-    {
-      "user_id": 8299996037,
-      "emoji": "🤣",
-      "user_name": "Meowie 🐱",
-      "enabled": true
-    },
-    {
-      "user_id": 873388037,
-      "emoji": "💩",
-      "user_name": "Would You Rather Bot",
-      "enabled": true
-    },
-    {
-      "user_id": 7433542559,
-      "emoji": "😐",
-      "user_name": "Amir 𝟭𝟳:𝟰𝟵",
-      "enabled": true
-    }
-  ],
+  "user_reactions": [],
   "chat_reactions": [],
+  "text_reactions": [],
   "tapchi_enabled": false,
   "banner_mode": "forward",
-  "banners": {
-    "-1001497808404": {
-      "chat_name": "BSLife Group",
-      "list": [
+  "banners": {},
+  "active_effects": [],
+  "open_panels": [],
+  "owner_id": 828898604,
+  "actions_list": [],
+  "werewolf_vote_enabled": true,
+  "werewolf_votes": [],
+  "werewolf_next_group_id": null,
+  "werewolf_game_votes": {
+    "-1001588845311": {
+      "normal": [
         {
-          "id": 2,
-          "from_chat_id": -1001497808404,
-          "message_id": 3353437,
-          "interval": 3605,
-          "enabled": true
-        },
-        {
-          "id": 3,
-          "from_chat_id": -1001497808404,
-          "message_id": 3353490,
-          "interval": 3600,
-          "enabled": true
+          "id": 7618187845,
+          "name": "𝒎𝒂𝒉𝒊᭄🦋"
         }
+      ],
+      "trouble": [
+        null,
+        null
       ]
     }
   },
-  "owner_id": 8007222105,
-  "active_effects": [],
-  "open_panels": [
-    {
-      "chat_id": 8007222105,
-      "message_id": 73945
-    },
-    {
-      "chat_id": 8520664106,
-      "message_id": 74240
-    },
-    {
-      "chat_id": 8007222105,
-      "message_id": 74272
-    },
-    {
-      "chat_id": 5665336718,
-      "message_id": 74305
-    },
-    {
-      "chat_id": -1001497808404,
-      "message_id": 3346213
-    },
-    {
-      "chat_id": 5665336718,
-      "message_id": 74793
-    },
-    {
-      "chat_id": 8839188064,
-      "message_id": 76601
-    },
-    {
-      "chat_id": 7978315861,
-      "message_id": 83010
-    },
-    {
-      "chat_id": -1002629648248,
-      "message_id": 187446
-    },
-    {
-      "chat_id": -1002629648248,
-      "message_id": 187457
-    },
-    {
-      "chat_id": -1002629648248,
-      "message_id": 187461
-    },
-    {
-      "chat_id": -1002629648248,
-      "message_id": 188865
-    },
-    {
-      "chat_id": 8007222105,
-      "message_id": 85140
-    },
-    {
-      "chat_id": -1001497808404,
-      "message_id": 3449111
-    }
-  ],
-  "text_reactions": [],
-  "action_enabled": true,
-  "action_type": "تایپ",
-  "actions_list": []
+  "werewolf_next_group_ids": [
+    -1001588845311
+  ]
 }
