@@ -17,14 +17,43 @@ from bot import BotManager
 from panel import set_bot_username
 from panel_tracker import PanelTracker
 from action import ActionManager, ACTION_MAP, ACTION_DESC
+from pv_lock import PVLockManager
 
-load_dotenv()
+# ─── لود .env از پوشه‌ی خود فایل (مستقل از محل اجرا) ───
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+load_dotenv()  # fallback: .env محل اجرا (بدون override)
+
+
+def _env(*names, default=None):
+    """خواندن اولین متغیر محیطی موجود از بین نام‌ها"""
+    for name in names:
+        val = os.getenv(name)
+        if val not in (None, ""):
+            return val
+    return default
+
 
 # ─── تنظیمات ───
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
-PHONE_NUMBER = os.getenv("PHONE_NUMBER")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+# حالت چندکاربره: ربات مدیریت با متغیرهای SELF_* اجرا می‌کند
+# حالت تک‌کاربره (قدیمی): از API_ID / API_HASH / ... استفاده می‌شود
+API_ID = int(_env("SELF_API_ID", "API_ID"))
+API_HASH = _env("SELF_API_HASH", "API_HASH")
+PHONE_NUMBER = _env("SELF_PHONE", "PHONE_NUMBER", default="") or None
+BOT_TOKEN = _env("SELF_BOT_TOKEN", "BOT_TOKEN", default="") or None
+
+# ─── مسیر سشن و کانفیگ (چندکاربره) ───
+SESSION_NAME = _env("SELF_SESSION", default="user_session")
+BOT_SESSION_NAME = _env("SELF_BOT_SESSION", default="bot_session")
+CONFIG_FILE = _env("SELF_CONFIG", default="config.json")
+
+# ─── ربات پنل مشترک (ربات مدیریت) ───
+# اگر کاربر توکن ربات اختصاصی نداشته باشد، پنل از طریق ربات مدیریت کار می‌کند
+PANEL_BOT = _env("SELF_PANEL_BOT", default="") or None
+
+# فایل دستورات پنل مشترک (کنار کانفیگ کاربر)
+COMMANDS_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(CONFIG_FILE)), "commands.json"
+)
 
 # ─── پروکسی ───
 PROXY_SCHEME = os.getenv("PROXY_SCHEME", "").lower()
@@ -65,9 +94,6 @@ def build_proxy():
     return proxy
 
 
-CONFIG_FILE = "config.json"
-
-
 class ConfigManager:
     def __init__(self, filepath):
         self.filepath = filepath
@@ -89,6 +115,7 @@ class ConfigManager:
             "open_panels": [],
             "owner_id": 0,
             "actions_list": [],
+            "pv_locks": [],
         }
         if os.path.exists(self.filepath):
             with open(self.filepath, "r", encoding="utf-8") as f:
@@ -249,11 +276,33 @@ def is_command(text):
         "اکشن روشن", "اکشن خاموش",
         "لیست اکشن", "پاکسازی اکشن",
         "حذف اکشن",
+        "قفل پیوی", "پیوی قفل",
+        "حذف پیوی قفل", "حذف قفل پیوی",
+        "لیست قفل پیوی", "لیست پیوی قفل",
+        "پاکسازی قفل پیوی",
         "راهنما",
     }
 
     if text in exact_commands:
         return True
+
+    # ─── قفل پیوی [یوزرنیم/آیدی] ───
+    for prefix in ("قفل پیوی ", "پیوی قفل "):
+        if text.startswith(prefix):
+            rest = text[len(prefix):].strip()
+            if _looks_like_id_or_username(rest):
+                return True
+            return False
+
+    # ─── حذف قفل پیوی [یوزرنیم/آیدی/شماره] ───
+    for prefix in ("حذف پیوی قفل ", "حذف قفل پیوی "):
+        if text.startswith(prefix):
+            rest = text[len(prefix):].strip()
+            if _looks_like_id_or_username(rest):
+                return True
+            if rest.isdigit():
+                return True
+            return False
 
     # ─── اکشن [نوع] ───
     if text.startswith("اکشن "):
@@ -603,45 +652,170 @@ async def _parse_and_start_spam(spam_mgr, event, text, delete_mode,
     return None
 
 
+# ═══════════════════════════════════════
+# همگام‌سازی پنل مشترک (ربات مدیریت)
+# ربات مدیریت روی config.json این کاربر تغییر می‌نویسد و
+# دستورهای لحظه‌ای را در commands.json می‌گذارد؛ این وظیفه
+# آن‌ها را هر ۲ ثانیه می‌خواند و در همان پروسه اعمال می‌کند.
+# ═══════════════════════════════════════
+
+async def panel_sync_watcher(config, clock_mgr, banner_mgr, action_mgr, spam_mgr):
+    def _watched_snapshot():
+        return (
+            config.get("clock_enabled"),
+            config.get("clock_bio_enabled"),
+            config.get("clock_font"),
+            config.get("tapchi_enabled"),
+            config.get("banner_mode"),
+            json.dumps(config.get("banners", {}), sort_keys=True,
+                       ensure_ascii=False),
+            json.dumps(config.get("actions_list", []), sort_keys=True,
+                       ensure_ascii=False),
+        )
+
+    def _reload_config_from_disk():
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                fresh = json.load(f)
+            config.data = fresh
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"⚠️ watcher: خطا در خواندن کانفیگ: {str(e)[:60]}")
+
+    def _run_panel_command(cmd):
+        name = cmd.get("cmd", "")
+        try:
+            if name == "spam_stop_all":
+                spam_mgr.stop_all()
+                print("🎛 دستور پنل: توقف همه اسپم‌ها")
+        except Exception as e:
+            print(f"⚠️ خطا در دستور پنل {name}: {e}")
+
+    def _consume_commands_file():
+        if not os.path.exists(COMMANDS_FILE):
+            return
+        tmp = COMMANDS_FILE + ".run"
+        try:
+            os.replace(COMMANDS_FILE, tmp)
+        except OSError:
+            return
+        try:
+            with open(tmp, "r", encoding="utf-8") as f:
+                commands = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            commands = []
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        for cmd in commands:
+            _run_panel_command(cmd)
+
+    def _apply_clock_state():
+        if config.get("clock_enabled"):
+            clock_mgr.start()
+        else:
+            clock_mgr.stop()
+
+    def _apply_tapchi_state():
+        if config.get("tapchi_enabled"):
+            banner_mgr.start_all()
+        else:
+            banner_mgr.stop_all()
+
+    def _apply_actions_state():
+        action_mgr.stop_all_tasks()
+        action_mgr.start_saved_actions()
+
+    prev = _watched_snapshot()
+    last_mtime = 0
+    print("🎛 واچر همگام‌سازی پنل مشترک فعال شد")
+    while True:
+        await asyncio.sleep(2)
+        try:
+            try:
+                mtime = os.path.getmtime(CONFIG_FILE)
+            except OSError:
+                mtime = 0
+
+            if mtime != last_mtime:
+                last_mtime = mtime
+                _reload_config_from_disk()
+
+            _consume_commands_file()
+
+            cur = _watched_snapshot()
+            if cur != prev:
+                # ساعت روشن/خاموش
+                if cur[0] != prev[0]:
+                    _apply_clock_state()
+                # فونت ساعت → رفرش فوری متن
+                if cur[2] != prev[2]:
+                    clock_mgr.last_time = ""
+                # تپچی روشن/خاموش یا تغییر لیست بنرها
+                if cur[3] != prev[3] or cur[5] != prev[5]:
+                    _apply_tapchi_state()
+                # تغییر لیست اکشن‌ها
+                if cur[6] != prev[6]:
+                    _apply_actions_state()
+                prev = cur
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"⚠️ خطا در واچر پنل: {str(e)[:80]}")
+
+
 # ─── ساخت کلاینت‌ها ───
 proxy_config = build_proxy()
+
+_client_kwargs = dict(
+    connection_retries=5, retry_delay=2,
+    timeout=30, auto_reconnect=True,
+)
 
 if proxy_config:
     print(f"🌐 پروکسی: {PROXY_SCHEME}://{PROXY_HOST}:{PROXY_PORT}")
     user_client = TelegramClient(
-        "user_session", API_ID, API_HASH,
-        proxy=proxy_config,
-        connection_retries=5, retry_delay=2,
-        timeout=30, auto_reconnect=True,
+        SESSION_NAME, API_ID, API_HASH,
+        proxy=proxy_config, **_client_kwargs
     )
-    bot_client = TelegramClient(
-        "bot_session", API_ID, API_HASH,
-        proxy=proxy_config,
-        connection_retries=5, retry_delay=2,
-        timeout=30, auto_reconnect=True,
+    bot_client = (
+        TelegramClient(
+            BOT_SESSION_NAME, API_ID, API_HASH,
+            proxy=proxy_config, **_client_kwargs
+        )
+        if BOT_TOKEN else None
     )
 else:
     print("🔌 بدون پروکسی")
-    user_client = TelegramClient("user_session", API_ID, API_HASH)
-    bot_client = TelegramClient("bot_session", API_ID, API_HASH)
+    user_client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+    bot_client = (
+        TelegramClient(BOT_SESSION_NAME, API_ID, API_HASH)
+        if BOT_TOKEN else None
+    )
 
 
 async def main():
     await user_client.start(phone=PHONE_NUMBER)
-    await bot_client.start(bot_token=BOT_TOKEN)
 
     print("✅ یوزر کلاینت متصل شد")
-    print("✅ ربات متصل شد")
 
     me = await user_client.get_me()
     owner_id = me.id
 
-    bot_me = await bot_client.get_me()
-    bot_username = bot_me.username
-    set_bot_username(bot_username)
+    bot_username = None
+    if bot_client:
+        await bot_client.start(bot_token=BOT_TOKEN)
+        print("✅ ربات متصل شد")
+        bot_me = await bot_client.get_me()
+        bot_username = bot_me.username
+        set_bot_username(bot_username)
+        print(f"🤖 Bot: @{bot_username}")
+    else:
+        print("ℹ️ BOT_TOKEN تنظیم نشده - پنل اینلاین از ربات مدیریت")
 
     print(f"👤 Owner: {me.first_name} ({owner_id})")
-    print(f"🤖 Bot: @{bot_username}")
 
     config = ConfigManager(CONFIG_FILE)
     config.set("owner_id", owner_id)
@@ -654,6 +828,7 @@ async def main():
     spam = SpamManager(user_client, effects, config)
     panel_tracker = PanelTracker(config)
     action = ActionManager(user_client, config)
+    pv_lock = PVLockManager(user_client, config)
 
     # ─── استارت اکشن‌های ذخیره شده ───
     action.start_saved_actions()
@@ -667,20 +842,41 @@ async def main():
         banner.start_all()
         print("📢 تپچی از تنظیمات قبلی روشن شد")
 
-    # ─── ساخت مدیر ربات ───
-    bot_mgr = BotManager(
-        bot_client, config, clock, react, banner, spam,
-        panel_tracker, owner_id, action_mgr=action
-    )
+    # ─── ساخت مدیر ربات (فقط اگر توکن ربات موجود باشد) ───
+    bot_mgr = None
+    if bot_client:
+        bot_mgr = BotManager(
+            bot_client, config, clock, react, banner, spam,
+            panel_tracker, owner_id, action_mgr=action,
+            pv_lock_mgr=pv_lock
+        )
+
+    # ─── ربات پنل: یا ربات اختصاصی کاربر یا ربات مدیریت مشترک ───
+    panel_bot_username = bot_username or PANEL_BOT
+
+    # ─── واچر همگام‌سازی با ربات مدیریت مشترک ───
+    if PANEL_BOT:
+        asyncio.ensure_future(
+            panel_sync_watcher(config, clock, banner, action, spam)
+        )
+        print(f"🎛 پنل مشترک از طریق ربات مدیریت: @{PANEL_BOT}")
 
     # ═══════════════════════════════════════
     # هندلر پنل
     # ═══════════════════════════════════════
     @user_client.on(events.NewMessage(outgoing=True, pattern=r"(?i)^پنل$"))
     async def panel_command(event):
+        if not panel_bot_username:
+            await event.edit(
+                "❌ **ربات پنل فعال نیست**\n"
+                "توکن ربات یا ربات مدیریت مشترک تنظیم نشده است."
+            )
+            return
         try:
             await event.delete()
-            results = await user_client.inline_query(bot_username, "panel")
+            results = await user_client.inline_query(
+                panel_bot_username, "panel"
+            )
             sent_msg = await results[0].click(
                 event.chat_id,
                 reply_to=event.reply_to_msg_id if event.is_reply else None,
@@ -696,10 +892,15 @@ async def main():
             )
 
     # ═══════════════════════════════════════
-    # هندلر ریکت + اکشن + اسپم متنی (پیام‌های ورودی)
+    # هندلر ریکت + اکشن + اسپم متنی + قفل پیوی (پیام‌های ورودی)
     # ═══════════════════════════════════════
     @user_client.on(events.NewMessage(incoming=True))
     async def incoming_handler(event):
+        # قفل پیوی - حذف فوری دوطرفه (اولویت اول)
+        deleted = await pv_lock.handle_new_message(event)
+        if deleted:
+            return
+
         # ریکت خودکار
         await react.handle_new_message(event)
 
@@ -710,6 +911,14 @@ async def main():
         await spam.handle_target_trigger(event)
 
     # ═══════════════════════════════════════
+    # هندلر پیام‌های ادیت‌شده (قفل پیوی)
+    # ═══════════════════════════════════════
+    @user_client.on(events.MessageEdited(incoming=True))
+    async def edited_handler(event):
+        # اگر کاربر قفل‌شده پیام قدیمی را ادیت کرد → حذف دوطرفه
+        await pv_lock.handle_new_message(event)
+
+    # ═══════════════════════════════════════
     # هندلر همه دستورات
     # ═══════════════════════════════════════
     @user_client.on(events.NewMessage(outgoing=True))
@@ -717,6 +926,19 @@ async def main():
         text = event.raw_text.strip() if event.raw_text else ""
         if not text:
             return
+
+        async def _pvlock_confirm(text_result):
+            """نمایش نتیجه قفل پیوی + حذف خودکار پیام در چت دیگران (بعد از ۵ ثانیه)"""
+            try:
+                await event.edit(text_result)
+            except Exception:
+                return
+            if event.chat_id != owner_id:
+                await asyncio.sleep(5)
+                try:
+                    await event.delete()
+                except Exception:
+                    pass
 
         # ═══════════════════════════════════════
         # بستن پنل‌ها
@@ -766,8 +988,12 @@ async def main():
         # ═══════════════════════════════════════
         elif text == "راهنما":
             try:
+                if not panel_bot_username:
+                    raise RuntimeError("no bot")
                 await event.delete()
-                results = await user_client.inline_query(bot_username, "panel")
+                results = await user_client.inline_query(
+                    panel_bot_username, "panel"
+                )
                 sent_msg = await results[0].click(
                     event.chat_id, hide_via=False
                 )
@@ -961,6 +1187,141 @@ async def main():
                     await event.delete()
                 except:
                     pass
+            return
+
+        # ═══════════════════════════════════════
+        # قفل پیوی - حذف دوطرفه خودکار پیام‌ها
+        # ═══════════════════════════════════════
+        elif text in ("قفل پیوی", "پیوی قفل"):
+            target_id = None
+            target_name = ""
+            target_username = ""
+
+            # ۱) ریپلای روی کاربر
+            if event.is_reply:
+                reply = await event.get_reply_message()
+                if reply and reply.sender_id:
+                    target_id = reply.sender_id
+
+            # ۲) داخل چت خصوصی → طرف مقابل
+            if not target_id and event.is_private:
+                target_id = event.chat_id
+
+            if not target_id:
+                await event.edit(
+                    "❌ **تارگت مشخص نشد**\n\n"
+                    "▸ در پیوی فرد: `قفل پیوی`\n"
+                    "▸ ریپلای + `قفل پیوی`\n"
+                    "▸ `قفل پیوی @username`\n"
+                    "▸ `قفل پیوی [آیدی عددی]`"
+                )
+                return
+
+            if target_id == owner_id:
+                await event.edit("❌ **نمی‌توانید خودتان را قفل کنید**")
+                return
+
+            try:
+                entity = await user_client.get_entity(target_id)
+                target_name = extract_name(entity)
+                target_username = getattr(entity, 'username', '') or ''
+            except Exception:
+                target_name = str(target_id)
+
+            result = pv_lock.add_lock(
+                target_id, target_name, target_username
+            )
+            await _pvlock_confirm(result)
+            return
+
+        elif text.startswith(("قفل پیوی ", "پیوی قفل ")) and is_command(text):
+            target = text.split(maxsplit=2)[-1].strip()
+            try:
+                if target.lstrip("-").isdigit():
+                    target_id = int(target)
+                    try:
+                        entity = await user_client.get_entity(target_id)
+                    except Exception:
+                        await event.edit(
+                            f"❌ کاربر `{target_id}` پیدا نشد"
+                        )
+                        return
+                else:
+                    entity = await user_client.get_entity(target)
+                    target_id = entity.id
+
+                if target_id == owner_id:
+                    await event.edit("❌ **نمی‌توانید خودتان را قفل کنید**")
+                    return
+
+                target_name = extract_name(entity)
+                target_username = getattr(entity, 'username', '') or ''
+                result = pv_lock.add_lock(
+                    target_id, target_name, target_username
+                )
+                await _pvlock_confirm(result)
+            except Exception as e:
+                await event.edit(f"❌ پیدا نشد: {str(e)[:80]}")
+            return
+
+        elif text in ("حذف پیوی قفل", "حذف قفل پیوی"):
+            target_id = None
+
+            # ۱) ریپلای روی کاربر
+            if event.is_reply:
+                reply = await event.get_reply_message()
+                if reply and reply.sender_id:
+                    target_id = reply.sender_id
+
+            # ۲) داخل چت خصوصی → طرف مقابل
+            if not target_id and event.is_private:
+                target_id = event.chat_id
+
+            if not target_id:
+                await event.edit(
+                    "❌ **تارگت مشخص نشد**\n\n"
+                    "▸ ریپلای + `حذف پیوی قفل`\n"
+                    "▸ `حذف پیوی قفل @username`\n"
+                    "▸ `حذف پیوی قفل [آیدی عددی]`\n"
+                    "▸ `حذف قفل پیوی [شماره لیست]`"
+                )
+                return
+
+            result = pv_lock.remove_lock(target_id)
+            await _pvlock_confirm(result)
+            return
+
+        elif text.startswith(("حذف پیوی قفل ", "حذف قفل پیوی ")) and is_command(text):
+            target = text.split(maxsplit=3)[-1].strip()
+
+            # آیدی عددی → ممکن است شماره لیست یا آیدی کاربر باشد
+            if target.lstrip("-").isdigit():
+                num = int(target)
+                total = len(config.get("pv_locks", []))
+                if 1 <= num <= total and num < 100000:
+                    result = pv_lock.remove_by_index(num)
+                    await _pvlock_confirm(result)
+                    return
+                result = pv_lock.remove_lock(num)
+                await _pvlock_confirm(result)
+                return
+
+            # یوزرنیم
+            try:
+                entity = await user_client.get_entity(target)
+                result = pv_lock.remove_lock(entity.id)
+                await _pvlock_confirm(result)
+            except Exception as e:
+                await event.edit(f"❌ پیدا نشد: {str(e)[:80]}")
+            return
+
+        elif text in ("لیست قفل پیوی", "لیست پیوی قفل"):
+            await event.edit(pv_lock.get_list_text())
+            return
+
+        elif text == "پاکسازی قفل پیوی":
+            result = pv_lock.clear_all()
+            await event.edit(result)
             return
 
         # ═══════════════════════════════════════
@@ -1449,13 +1810,19 @@ async def main():
     print("🚀 سلف‌بات آماده به کار است!")
     print(f"📝 برای پنل: 'پنل' بنویسید")
     print(f"📖 برای راهنما: 'راهنما' بنویسید")
-    print(f"🤖 Bot: @{bot_username}")
+    if bot_username:
+        print(f"🤖 Bot: @{bot_username}")
+    elif PANEL_BOT:
+        print(f"🤖 پنل مشترک: @{PANEL_BOT}")
     print("=" * 50 + "\n")
 
-    await asyncio.gather(
-        user_client.run_until_disconnected(),
-        bot_client.run_until_disconnected()
-    )
+    if bot_client:
+        await asyncio.gather(
+            user_client.run_until_disconnected(),
+            bot_client.run_until_disconnected()
+        )
+    else:
+        await user_client.run_until_disconnected()
 
 
 if __name__ == "__main__":
