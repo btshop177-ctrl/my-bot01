@@ -33,16 +33,6 @@ def _env(*names, default=None):
     return default
 
 
-
-def _env(*names, default=None):
-    """خواندن اولین متغیر محیطی موجود از بین نام‌ها"""
-    for name in names:
-        val = os.getenv(name)
-        if val not in (None, ""):
-            return val
-    return default
-
-
 # ─── تنظیمات ───
 # حالت چندکاربره: ربات مدیریت با متغیرهای SELF_* اجرا می‌کند
 # حالت تک‌کاربره (قدیمی): از API_ID / API_HASH / ... استفاده می‌شود
