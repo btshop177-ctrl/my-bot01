@@ -15,8 +15,6 @@ from panel import (
     get_font_panel_text, get_font_panel_buttons,
     get_action_panel_text, get_action_panel_buttons,
     get_help_panel_text, get_help_panel_buttons,
-    get_werewolf_panel_text, get_werewolf_panel_buttons,
-    get_werewolf_votes_text, get_werewolf_votes_buttons,  # اضافه شد
     HELP_TEXTS,
 )
 
@@ -24,7 +22,7 @@ from panel import (
 class BotManager:
     def __init__(self, bot_client, config_manager, clock_mgr, react_mgr,
                  banner_mgr, spam_mgr, panel_tracker, owner_id,
-                 action_mgr=None, werewolf_mgr=None):
+                 action_mgr=None):
         self.bot = bot_client
         self.config = config_manager
         self.clock = clock_mgr
@@ -34,7 +32,6 @@ class BotManager:
         self.tracker = panel_tracker
         self.owner_id = owner_id
         self.action = action_mgr
-        self.werewolf = werewolf_mgr
         self.register_handlers()
 
     def register_handlers(self):
@@ -66,293 +63,11 @@ class BotManager:
 
             data = event.data.decode("utf-8")
 
-            async def safe_edit(text, buttons=None):
-                """ویرایش امن بدون خطر کرش در صورت عدم تغییر پیام"""
-                try:
-                    await event.edit(text, buttons=buttons)
-                except Exception as edit_err:
-                    if "MESSAGE_NOT_MODIFIED" not in str(edit_err).upper():
-                        print(f"❌ خطا در ویرایش پنل: {edit_err}")
-                try:
-                    await event.answer()
-                except:
-                    pass
-
             # ─── منوی اصلی ───
             if data == "panel_main":
-                await safe_edit(
+                await event.edit(
                     get_main_panel_text(),
                     buttons=get_main_panel_buttons()
-                )
-
-
-            # ─── پنل گرگینه (اصلی) ───
-
-            elif data == "panel_werewolf" and self.werewolf:
-
-                await safe_edit(
-
-                    get_werewolf_panel_text(self.werewolf),
-
-                    buttons=get_werewolf_panel_buttons(self.werewolf)
-
-                )
-
-
-            # ─── روشن/خاموش کردن گروه ───
-
-            elif data.startswith("wg_toggle_") and self.werewolf:
-
-                try:
-
-                    gid = int(data[10:])
-
-                except ValueError:
-
-                    return
-
-                state = self.werewolf.games.get(gid)
-
-                if state:
-
-                    current = state.get("enabled", True)
-
-                    state["enabled"] = not current
-
-                    self.werewolf._save_games()
-
-                    status = "خاموش 🔴" if current else "روشن 🟢"
-
-                    name = state.get("group_name", str(gid))
-
-                    await event.answer(f"{name}: {status}", alert=True)
-
-                else:
-
-                    await event.answer("❌ گروه پیدا نشد", alert=True)
-
-                await safe_edit(
-
-                    get_werewolf_panel_text(self.werewolf),
-
-                    buttons=get_werewolf_panel_buttons(self.werewolf)
-
-                )
-
-
-            # ─── حذف گروه ───
-
-            elif data.startswith("wg_delete_") and self.werewolf:
-
-                try:
-
-                    gid = int(data[10:])
-
-                except ValueError:
-
-                    return
-
-                state = self.werewolf.games.get(gid)
-
-                if state:
-
-                    name = state.get("group_name", str(gid))
-
-                    await safe_edit(
-
-                        f"⚠️ **حذف گروه {name}؟**\n"
-
-                        "تمام رأی‌های این گروه هم حذف می‌شوند.",
-
-                        buttons=[
-
-                            [Button.inline(
-
-                                "✅ بله، حذف کن",
-
-                                data=f"wg_confirm_del_{gid}"
-
-                            )],
-
-                            [Button.inline(
-
-                                "🔙 انصراف",
-
-                                data="panel_werewolf"
-
-                            )],
-
-                        ]
-
-                    )
-
-                else:
-
-                    await event.answer("❌ گروه پیدا نشد", alert=True)
-
-                    await safe_edit(
-
-                        get_werewolf_panel_text(self.werewolf),
-
-                        buttons=get_werewolf_panel_buttons(self.werewolf)
-
-                    )
-
-
-            elif data.startswith("wg_confirm_del_") and self.werewolf:
-
-                try:
-
-                    gid = int(data[15:])
-
-                except ValueError:
-
-                    return
-
-                result = self.werewolf.untrack_group(gid)
-
-                await event.answer(result, alert=True)
-
-                await safe_edit(
-
-                    get_werewolf_panel_text(self.werewolf),
-
-                    buttons=get_werewolf_panel_buttons(self.werewolf)
-
-                )
-
-
-            # ─── صفحه رأی‌ها ───
-
-            elif data == "werewolf_votes" and self.werewolf:
-
-                await safe_edit(
-
-                    get_werewolf_votes_text(self.werewolf),
-
-                    buttons=get_werewolf_votes_buttons(self.werewolf)
-
-                )
-
-
-            elif data == "werewolf_vote_toggle" and self.werewolf:
-
-                if self.werewolf.is_vote_enabled():
-
-                    result = self.werewolf.disable_votes()
-
-                else:
-
-                    result = self.werewolf.enable_votes()
-
-                await event.answer(result, alert=True)
-
-                await safe_edit(
-
-                    get_werewolf_votes_text(self.werewolf),
-
-                    buttons=get_werewolf_votes_buttons(self.werewolf)
-
-                )
-
-
-            elif data == "werewolf_vote_clear" and self.werewolf:
-
-                self.werewolf.clear_votes()
-
-                await event.answer("🗑 همه رأی‌ها پاک شدند.", alert=True)
-
-                await safe_edit(
-
-                    get_werewolf_votes_text(self.werewolf),
-
-                    buttons=get_werewolf_votes_buttons(self.werewolf)
-
-                )
-
-
-            # ─── حذف یک رأی عادی (wv_del_<gid>_<idx>) ───
-
-            elif data.startswith("wv_del_") and self.werewolf:
-
-                try:
-
-                    payload = data[len("wv_del_"):]
-
-                    gid_str, idx_str = payload.rsplit("_", 1)
-
-                    gid, idx = int(gid_str), int(idx_str)
-
-                except ValueError:
-
-                    return
-
-                result = self.werewolf.remove_vote(gid, idx)
-
-                try:
-                    await event.answer(result, alert=True)
-                except Exception:
-                    pass
-
-                await safe_edit(
-
-                    get_werewolf_votes_text(self.werewolf),
-
-                    buttons=get_werewolf_votes_buttons(self.werewolf)
-
-                )
-
-
-            # ─── حذف یک رأی دردسر (wv_tdel_<gid>_<slot>) ───
-
-            elif data.startswith("wv_tdel_") and self.werewolf:
-
-                try:
-
-                    payload = data[len("wv_tdel_"):]
-
-                    gid_str, slot_str = payload.rsplit("_", 1)
-
-                    gid, slot = int(gid_str), int(slot_str)
-
-                except ValueError:
-
-                    return
-
-                result = self.werewolf.remove_trouble_vote(gid, slot)
-
-                try:
-                    await event.answer(result, alert=True)
-                except Exception:
-                    pass
-
-                await safe_edit(
-
-                    get_werewolf_votes_text(self.werewolf),
-
-                    buttons=get_werewolf_votes_buttons(self.werewolf)
-
-                )
-
-
-            # ─── راهنما ───
-
-            elif data == "werewolf_help" and self.werewolf:
-
-                await safe_edit(
-
-                    self.werewolf.get_help_text(),
-
-                    buttons=[
-
-                        [Button.inline(
-
-                            "🔙 بازگشت", data="panel_werewolf"
-
-                        )]
-
-                    ]
-
                 )
 
             elif data == "panel_close":
@@ -373,7 +88,7 @@ class BotManager:
 
             # ─── پنل ساعت ───
             elif data == "panel_clock":
-                await safe_edit(
+                await event.edit(
                     get_clock_panel_text(self.config),
                     buttons=get_clock_panel_buttons(self.config)
                 )
@@ -391,7 +106,7 @@ class BotManager:
                     await event.answer(
                         "🔴 ساعت خاموش شد!", alert=True
                     )
-                await safe_edit(
+                await event.edit(
                     get_clock_panel_text(self.config),
                     buttons=get_clock_panel_buttons(self.config)
                 )
@@ -411,21 +126,21 @@ class BotManager:
                     else "🔴 ساعت بیو خاموش شد!",
                     alert=True
                 )
-                await safe_edit(
+                await event.edit(
                     get_clock_panel_text(self.config),
                     buttons=get_clock_panel_buttons(self.config)
                 )
 
             # ─── پنل ریکت ───
             elif data == "panel_react":
-                await safe_edit(
+                await event.edit(
                     get_react_panel_text(self.config),
                     buttons=get_react_panel_buttons()
                 )
 
             elif data == "react_list":
                 text = self.react.get_full_list()
-                await safe_edit(
+                await event.edit(
                     text,
                     buttons=[
                         [Button.inline(
@@ -435,7 +150,7 @@ class BotManager:
                 )
 
             elif data == "react_clear":
-                await safe_edit(
+                await event.edit(
                     "⚠️ **آیا مطمئنید؟**\n"
                     "همه ریکت‌ها حذف می‌شوند.",
                     buttons=[
@@ -451,14 +166,14 @@ class BotManager:
             elif data == "react_clear_confirm":
                 result = self.react.clear_all()
                 await event.answer(result, alert=True)
-                await safe_edit(
+                await event.edit(
                     get_react_panel_text(self.config),
                     buttons=get_react_panel_buttons()
                 )
 
             # ─── پنل تپچی ───
             elif data == "panel_tapchi":
-                await safe_edit(
+                await event.edit(
                     get_tapchi_panel_text(self.config, self.banner),
                     buttons=get_tapchi_panel_buttons(self.config)
                 )
@@ -471,7 +186,7 @@ class BotManager:
                 await event.answer(
                     result.split('\n')[0], alert=True
                 )
-                await safe_edit(
+                await event.edit(
                     get_tapchi_panel_text(self.config, self.banner),
                     buttons=get_tapchi_panel_buttons(self.config)
                 )
@@ -481,7 +196,7 @@ class BotManager:
                 await event.answer(
                     "✅ حالت: فوروارد", alert=True
                 )
-                await safe_edit(
+                await event.edit(
                     get_tapchi_panel_text(self.config, self.banner),
                     buttons=get_tapchi_panel_buttons(self.config)
                 )
@@ -491,14 +206,14 @@ class BotManager:
                 await event.answer(
                     "✅ حالت: کپی", alert=True
                 )
-                await safe_edit(
+                await event.edit(
                     get_tapchi_panel_text(self.config, self.banner),
                     buttons=get_tapchi_panel_buttons(self.config)
                 )
 
             elif data == "tapchi_list":
                 text = self.banner.get_full_list()
-                await safe_edit(
+                await event.edit(
                     text,
                     buttons=[
                         [Button.inline(
@@ -508,7 +223,7 @@ class BotManager:
                 )
 
             elif data == "tapchi_clear":
-                await safe_edit(
+                await event.edit(
                     "⚠️ **آیا مطمئنید؟**\n"
                     "همه بنرها حذف می‌شوند.",
                     buttons=[
@@ -525,14 +240,14 @@ class BotManager:
             elif data == "tapchi_clear_confirm":
                 result = self.banner.clear_all_banners()
                 await event.answer(result, alert=True)
-                await safe_edit(
+                await event.edit(
                     get_tapchi_panel_text(self.config, self.banner),
                     buttons=get_tapchi_panel_buttons(self.config)
                 )
 
             # ─── پنل افکت ───
             elif data == "panel_effects":
-                await safe_edit(
+                await event.edit(
                     get_effects_panel_text(self.config),
                     buttons=get_effects_panel_buttons(self.config)
                 )
@@ -560,7 +275,7 @@ class BotManager:
                         )
                     self.config.set("active_effects", active)
 
-                    await safe_edit(
+                    await event.edit(
                         get_effects_panel_text(self.config),
                         buttons=get_effects_panel_buttons(
                             self.config
@@ -572,21 +287,21 @@ class BotManager:
                 await event.answer(
                     "🗑 همه افکت‌ها پاک شدند", alert=True
                 )
-                await safe_edit(
+                await event.edit(
                     get_effects_panel_text(self.config),
                     buttons=get_effects_panel_buttons(self.config)
                 )
 
             # ─── پنل اسپم ───
             elif data == "panel_spam":
-                await safe_edit(
+                await event.edit(
                     get_spam_panel_text(self.spam),
                     buttons=get_spam_panel_buttons()
                 )
 
             elif data == "spam_list":
                 text = self.spam.get_full_status_text()
-                await safe_edit(
+                await event.edit(
                     text,
                     buttons=[
                         [Button.inline(
@@ -596,7 +311,7 @@ class BotManager:
                 )
 
             elif data == "spam_stop_all":
-                await safe_edit(
+                await event.edit(
                     "⚠️ **آیا مطمئنید؟**\n"
                     "همه اسپم‌ها متوقف می‌شوند.",
                     buttons=[
@@ -615,14 +330,14 @@ class BotManager:
                 await event.answer(
                     f"🛑 {total} اسپم متوقف شد", alert=True
                 )
-                await safe_edit(
+                await event.edit(
                     get_spam_panel_text(self.spam),
                     buttons=get_spam_panel_buttons()
                 )
 
             # ─── پنل اکشن ───
             elif data == "panel_action":
-                await safe_edit(
+                await event.edit(
                     get_action_panel_text(self.config),
                     buttons=get_action_panel_buttons(self.config)
                 )
@@ -658,19 +373,24 @@ class BotManager:
                                 f"❌ خطا در toggle اکشن: {e}"
                             )
 
-                await safe_edit(
-                    get_action_panel_text(self.config),
-                    buttons=get_action_panel_buttons(
-                        self.config
+                try:
+                    await event.edit(
+                        get_action_panel_text(self.config),
+                        buttons=get_action_panel_buttons(
+                            self.config
+                        )
                     )
-                )
+                except Exception as e:
+                    print(
+                        f"❌ خطا در بروزرسانی پنل اکشن: {e}"
+                    )
 
             elif data == "action_list":
                 if self.action:
                     text = self.action.get_list_text()
                 else:
                     text = "❌ ماژول اکشن فعال نیست"
-                await safe_edit(
+                await event.edit(
                     text,
                     buttons=[
                         [Button.inline(
@@ -680,7 +400,7 @@ class BotManager:
                 )
 
             elif data == "action_clear":
-                await safe_edit(
+                await event.edit(
                     "⚠️ **آیا مطمئنید؟**\n"
                     "همه اکشن‌ها حذف می‌شوند.",
                     buttons=[
@@ -699,45 +419,41 @@ class BotManager:
                 if self.action:
                     result = self.action.clear_all()
                     await event.answer(result, alert=True)
-                await safe_edit(
+                await event.edit(
                     get_action_panel_text(self.config),
                     buttons=get_action_panel_buttons(self.config)
                 )
 
             # ─── پنل فونت ───
             elif data == "panel_font":
-                await safe_edit(
+                await event.edit(
                     get_font_panel_text(),
                     buttons=get_font_panel_buttons()
                 )
 
             elif data.startswith("font_"):
-                try:
-                    font_id = int(data.split("_")[1])
-                    self.config.set("clock_font", font_id)
-                    self.clock.last_time = ""
-                    await event.answer(
-                        f"✅ فونت {font_id} انتخاب شد!",
-                        alert=True
-                    )
-                except (IndexError, ValueError):
-                    await event.answer("❌ خطا در تغییر فونت", alert=True)
-
-                await safe_edit(
+                font_id = int(data.split("_")[1])
+                self.config.set("clock_font", font_id)
+                self.clock.last_time = ""
+                await event.answer(
+                    f"✅ فونت {font_id} انتخاب شد!",
+                    alert=True
+                )
+                await event.edit(
                     get_font_panel_text(),
                     buttons=get_font_panel_buttons()
                 )
 
             # ─── پنل راهنما ───
             elif data == "panel_help":
-                await safe_edit(
+                await event.edit(
                     get_help_panel_text(),
                     buttons=get_help_panel_buttons()
                 )
 
             elif data.startswith("help_"):
                 help_text = HELP_TEXTS.get(data, "❌ یافت نشد")
-                await safe_edit(
+                await event.edit(
                     help_text,
                     buttons=[
                         [Button.inline(
