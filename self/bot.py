@@ -14,6 +14,7 @@ from panel import (
     get_spam_panel_text, get_spam_panel_buttons,
     get_font_panel_text, get_font_panel_buttons,
     get_action_panel_text, get_action_panel_buttons,
+    get_pvlock_panel_text, get_pvlock_panel_buttons,
     get_help_panel_text, get_help_panel_buttons,
     HELP_TEXTS,
 )
@@ -22,7 +23,7 @@ from panel import (
 class BotManager:
     def __init__(self, bot_client, config_manager, clock_mgr, react_mgr,
                  banner_mgr, spam_mgr, panel_tracker, owner_id,
-                 action_mgr=None):
+                 action_mgr=None, pv_lock_mgr=None):
         self.bot = bot_client
         self.config = config_manager
         self.clock = clock_mgr
@@ -32,6 +33,7 @@ class BotManager:
         self.tracker = panel_tracker
         self.owner_id = owner_id
         self.action = action_mgr
+        self.pv_lock = pv_lock_mgr
         self.register_handlers()
 
     def register_handlers(self):
@@ -422,6 +424,66 @@ class BotManager:
                 await event.edit(
                     get_action_panel_text(self.config),
                     buttons=get_action_panel_buttons(self.config)
+                )
+
+            # ─── پنل قفل پیوی ───
+            elif data == "panel_pvlock":
+                await event.edit(
+                    get_pvlock_panel_text(self.config),
+                    buttons=get_pvlock_panel_buttons(self.config)
+                )
+
+            elif data.startswith("pvunlock_"):
+                if self.pv_lock:
+                    try:
+                        user_id = int(data[9:])
+                        result = self.pv_lock.remove_lock(user_id)
+                        await event.answer(
+                            result.split("\n")[0], alert=True
+                        )
+                    except (ValueError, IndexError):
+                        await event.answer("❌ خطا", alert=True)
+                await event.edit(
+                    get_pvlock_panel_text(self.config),
+                    buttons=get_pvlock_panel_buttons(self.config)
+                )
+
+            elif data == "pvlock_list":
+                if self.pv_lock:
+                    text = self.pv_lock.get_list_text()
+                else:
+                    text = "❌ ماژول قفل پیوی فعال نیست"
+                await event.edit(
+                    text,
+                    buttons=[
+                        [Button.inline(
+                            "🔙 بازگشت", data="panel_pvlock"
+                        )]
+                    ]
+                )
+
+            elif data == "pvlock_clear":
+                await event.edit(
+                    "⚠️ **آیا مطمئنید؟**\n"
+                    "قفل پیوی همه کاربران حذف می‌شود.",
+                    buttons=[
+                        [Button.inline(
+                            "✅ بله",
+                            data="pvlock_clear_confirm"
+                        )],
+                        [Button.inline(
+                            "🔙 انصراف", data="panel_pvlock"
+                        )],
+                    ]
+                )
+
+            elif data == "pvlock_clear_confirm":
+                if self.pv_lock:
+                    result = self.pv_lock.clear_all()
+                    await event.answer(result, alert=True)
+                await event.edit(
+                    get_pvlock_panel_text(self.config),
+                    buttons=get_pvlock_panel_buttons(self.config)
                 )
 
             # ─── پنل فونت ───
