@@ -16,6 +16,21 @@
   "werewolf_vote_enabled": true,
   "werewolf_votes": [],
   "werewolf_next_group_id": null,
-  "werewolf_game_votes": {},
-  "werewolf_next_group_ids": []
+  "werewolf_game_votes": {
+    "-1001588845311": {
+      "normal": [
+        {
+          "id": 7618187845,
+          "name": "𝒎𝒂𝒉𝒊᭄🦋"
+        }
+      ],
+      "trouble": [
+        null,
+        null
+      ]
+    }
+  },
+  "werewolf_next_group_ids": [
+    -1001588845311
+  ]
 }
