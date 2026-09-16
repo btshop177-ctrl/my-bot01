@@ -450,13 +450,34 @@ def format_role(role):
     )
 
 
+def roles_list_text():
+    """فهرست همه نقش‌ها گروه‌بندی‌شده بر اساس تیم (برای «آموزش نقش»)"""
+    teams = [
+        (TEAM_VILLAGE, "🏡 تیم روستا"),
+        (TEAM_WOLF, "🐺 تیم گرگ‌ها"),
+        (TEAM_CULT, "🔮 دیگر"),
+        (TEAM_SOLO, "🎭 تیم خوددل (انفرادی)"),
+        (TEAM_SPECIAL, "✨ نقش‌های ویژه"),
+    ]
+    lines = ["🐺 **لیست نقش‌های گرگینه** (۴۳ نقش)\n"]
+    for team_key, title in teams:
+        members = [r for r in ROLES.values() if r["team"] == team_key]
+        if not members:
+            continue
+        lines.append(f"**{title}** ({len(members)}):")
+        parts = [f"{r['emoji']} {r['name']}" for r in members]
+        lines.append("، ".join(parts) + "\n")
+    lines.append("برای توضیح کامل هر نقش:\n`آموزش <نام نقش>`\nمثال: `آموزش دردسر`")
+    return "\n".join(lines)
+
+
 def get_training_response(text):
     """پاسخ دستور را می‌سازد؛ برای متن غیرمرتبط None برمی‌گرداند."""
     query = parse_training_command(text)
     if query is None:
         return None
-    if not query:
-        return "❌ نام نقش را بنویسید.\nمثال: آموزش دردسر"
+    if not query or normalize_name(query) in ("نقش", "نقشها", "نقش ها", "لیست"):
+        return roles_list_text()
 
     role = find_role(query)
     if role:
@@ -464,7 +485,8 @@ def get_training_response(text):
 
     return (
         f"❌ نقشی با نام «{query}» پیدا نشد.\n"
-        "نام نقش را بررسی کنید؛ مثال: آموزش دردسر"
+        "نام نقش را بررسی کنید؛ مثال: آموزش دردسر\n"
+        "یا با `آموزش نقش` لیست همه نقش‌ها را ببینید."
     )
 
 

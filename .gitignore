@@ -31,3 +31,7 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+# Runtime data (multi-user self manager)
+self/data/
+self/logs/
+!self/.env.example

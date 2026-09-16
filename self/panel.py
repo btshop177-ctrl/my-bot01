@@ -41,7 +41,10 @@ def get_main_panel_buttons():
             Button.inline("⚡ اکشن", data="panel_action"),
         ],
         [
+            Button.inline("🔒 قفل پیوی", data="panel_pvlock"),
             Button.inline("🔤 فونت", data="panel_font"),
+        ],
+        [
             Button.inline("📖 راهنما", data="panel_help"),
         ],
         [Button.inline("❌ بستن پنل", data="panel_close")],
@@ -342,6 +345,78 @@ def get_action_panel_buttons(config):
 
 
 # ═══════════════════════════════════════
+# پنل قفل پیوی
+# ═══════════════════════════════════════
+
+def get_pvlock_panel_text(config):
+    locks = config.get("pv_locks", [])
+    total_deleted = sum(l.get("deleted_messages", 0) for l in locks)
+
+    text = "🔒 **قفل پیوی (حذف دوطرفه)**\n\n"
+    text += f"  ▸ کاربران قفل شده: `{len(locks)}`\n"
+    text += f"  ▸ پیام‌های حذف شده: `{total_deleted}`\n\n"
+
+    if locks:
+        text += "**کاربران قفل شده:**\n"
+        for i, lock in enumerate(locks, 1):
+            name = lock.get("user_name") or str(lock["user_id"])
+            for ch in ('*', '_', '`', '[', ']', '~'):
+                name = name.replace(ch, '')
+            deleted = lock.get("deleted_messages", 0)
+            text += f"  🔒 `{i}` **{name}**"
+            if deleted:
+                text += f" ({deleted} پیام حذف شد)"
+            text += "\n"
+        text += "\n"
+
+    text += (
+        "**دستورات قفل:**\n"
+        "▸ پیوی فرد: `قفل پیوی` یا `پیوی قفل`\n"
+        "▸ ریپلای + `قفل پیوی`\n"
+        "▸ `قفل پیوی @username`\n"
+        "▸ `قفل پیوی [آیدی عددی]`\n\n"
+        "**دستورات حذف قفل:**\n"
+        "▸ `حذف پیوی قفل` + ریپلای / پیوی\n"
+        "▸ `حذف پیوی قفل @username`\n"
+        "▸ `حذف قفل پیوی [آیدی]`\n"
+        "▸ `لیست قفل پیوی` | `پاکسازی قفل پیوی`\n\n"
+        "⚡ پیام‌های فرد قفل شده بلافاصله\n"
+        "برای هر دو طرف حذف می‌شوند."
+    )
+    return text
+
+
+def get_pvlock_panel_buttons(config):
+    locks = config.get("pv_locks", [])
+
+    rows = []
+
+    # دکمه حذف قفل برای هر کاربر
+    if locks:
+        row = []
+        for i, lock in enumerate(locks, 1):
+            name = lock.get("user_name") or str(lock["user_id"])
+            for ch in ('*', '_', '`', '[', ']', '~'):
+                name = name.replace(ch, '')
+            short = name[:14] + ".." if len(name) > 16 else name
+            row.append(Button.inline(
+                f"🔓{short}", data=f"pvunlock_{lock['user_id']}"
+            ))
+            if len(row) == 2:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+
+    rows.append([
+        Button.inline("📋 لیست", data="pvlock_list"),
+        Button.inline("🧹 پاکسازی", data="pvlock_clear"),
+    ])
+    rows.append([Button.inline("🔙 بازگشت", data="panel_main")])
+    return rows
+
+
+# ═══════════════════════════════════════
 # پنل فونت
 # ═══════════════════════════════════════
 
@@ -412,6 +487,19 @@ def get_help_panel_text():
         "`اکشن روشن/خاموش`\n"
         "`حالت اکشن [تایپ/ویس/استیکر/...]`\n\n"
 
+        "**🐺 آموزش نقش‌های گرگینه:**\n"
+        "توضیح وظیفه، توانایی و استراتژی هر نقش\n"
+        "`آموزش نقش` → لیست همه نقش‌ها\n"
+        "`آموزش دردسر` → توضیح نقش دردسر\n"
+        "`آموزش لیلیت` → و نقش‌های دیگر...\n\n"
+
+        "**🔒 قفل پیوی:**\n"
+        "حذف دوطرفه خودکار پیام‌های کاربر در پیوی\n"
+        "`قفل پیوی` | `پیوی قفل` → در پیوی یا ریپلای\n"
+        "`قفل پیوی @username` | `قفل پیوی [آیدی]`\n"
+        "`حذف پیوی قفل` | `حذف قفل پیوی`\n"
+        "`لیست قفل پیوی` | `پاکسازی قفل پیوی`\n\n"
+
         "**🆔 آیدی:**\n"
         "`آیدی` + ریپلای | `آیدی @user`\n\n"
 
@@ -435,6 +523,7 @@ def get_help_panel_buttons():
             Button.inline("🚀 اسپم", data="help_spam"),
             Button.inline("⚡ اکشن", data="help_action"),
         ],
+        [Button.inline("🔒 قفل پیوی", data="help_pvlock")],
         [Button.inline("🔙 بازگشت", data="panel_main")],
     ]
 
@@ -543,5 +632,26 @@ HELP_TEXTS = {
         "`آپلود فایل` → در حال آپلود فایل\n"
         "`بازی` → در حال بازی\n\n"
         "**مثال:** `حالت اکشن ویس`"
+    ),
+    "help_pvlock": (
+        "🔒 **راهنمای قفل پیوی**\n\n"
+        "وقتی پیوی یک کاربر را قفل کنید، هر پیامی که\n"
+        "در چت خصوصی ارسال کند در کسری از ثانیه\n"
+        "**برای هر دو طرف** حذف می‌شود. 🗑\n\n"
+        "**روش‌های قفل کردن:**\n"
+        "▸ داخل پیوی فرد: `قفل پیوی` یا `پیوی قفل`\n"
+        "▸ ریپلای روی فرد (هرجا): `قفل پیوی`\n"
+        "▸ با یوزرنیم: `قفل پیوی @username`\n"
+        "▸ با آیدی عددی: `قفل پیوی 123456789`\n\n"
+        "**حذف قفل:**\n"
+        "▸ ریپلای / پیوی: `حذف پیوی قفل` یا `حذف قفل پیوی`\n"
+        "▸ `حذف پیوی قفل @username`\n"
+        "▸ `حذف قفل پیوی [آیدی عددی]`\n"
+        "▸ `حذف قفل پیوی [شماره لیست]`\n\n"
+        "**لیست و پاکسازی:**\n"
+        "`لیست قفل پیوی` → نمایش قفل‌شده‌ها + آمار حذف\n"
+        "`پاکسازی قفل پیوی` → حذف همه قفل‌ها\n\n"
+        "**نکته:** حذف پیام‌ها کاملاً دوطرفه است\n"
+        "(revoke) - طرف مقابل متوجه محتوای پیام نمی‌شود."
     ),
 }
